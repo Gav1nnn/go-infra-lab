@@ -1,0 +1,45 @@
+# 文本文件统一 LF（跨平台保持一致）
+* text=auto eol=lf
+
+# Go 源码
+*.go text eol=lf
+
+# Markdown / 文档
+*.md text eol=lf
+*.txt text eol=lf
+
+# Shell 脚本
+*.sh text eol=lf
+
+# Makefile
+Makefile text eol=lf
+makefile text eol=lf
+
+# YAML / TOML / JSON 配置
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+
+# Git 文件
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# 二进制文件（禁止 diff）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.gz binary
+*.bz2 binary
+*.xz binary

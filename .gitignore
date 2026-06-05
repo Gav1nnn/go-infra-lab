@@ -1,0 +1,20 @@
+# ===== Go 编译产物 =====
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.test.exe
+
+# ===== 构建目录 =====
+/bin/
+/build/
+
+# ===== 环境 =====
+.env
+*.log
+
+# ===== 依赖缓存 =====
+/vendor/
