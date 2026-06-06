@@ -1,4 +1,4 @@
-module github.com/Gav1nnn/go-infra-lab/tree/main/distributed-fs
+module github.com/Gav1nnn/go-infra-lab/distributed-fs
 
 go 1.26.4
 
