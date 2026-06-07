@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+// TestPathTransformFunc verifies that CASPathTransformFunc produces
+// the expected SHA-1 based nested directory path.
 func TestPathTransformFunc(t *testing.T) {
 	key := "momsbestpicture"
 	pathKey := CASPathTransformFunc(key)
@@ -22,6 +24,7 @@ func TestPathTransformFunc(t *testing.T) {
 	}
 }
 
+// TestStore runs a full write → read → delete cycle 50 times.
 func TestStore(t *testing.T) {
 	s := newStore()
 	id := generateID()
@@ -31,14 +34,17 @@ func TestStore(t *testing.T) {
 		key := fmt.Sprintf("foo_%d", i)
 		data := []byte("some jpg bytes")
 
+		// Write
 		if _, err := s.writeStream(id, key, bytes.NewReader(data)); err != nil {
 			t.Error(err)
 		}
 
+		// Verify it exists
 		if ok := s.Has(id, key); !ok {
 			t.Errorf("expected to have key %s", key)
 		}
 
+		// Read back and compare content
 		_, r, err := s.Read(id, key)
 		if err != nil {
 			t.Error(err)
@@ -49,10 +55,12 @@ func TestStore(t *testing.T) {
 			t.Errorf("want %s have %s", data, b)
 		}
 
+		// Delete
 		if err := s.Delete(id, key); err != nil {
 			t.Error(err)
 		}
 
+		// Verify it's gone
 		if ok := s.Has(id, key); ok {
 			t.Errorf("expected to NOT have key %s", key)
 		}
