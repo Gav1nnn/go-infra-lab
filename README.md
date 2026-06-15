@@ -6,9 +6,9 @@
 
 ## Modules
 
-目前计划实现三个模块：
 
 ```text
-workerpool/   并发任务池
-ratelimiter/  限流器
-cache/        本地缓存
+workerpool/     并发任务池
+ratelimiter/    限流器
+cache/          本地缓存
+distributed-fs/ 分布式文件系统
