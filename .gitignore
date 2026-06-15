@@ -1,3 +1,21 @@
+# ===== OS / 文件系统 =====
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Desktop.ini
+
+# ===== 编辑器 / IDE =====
+.idea/
+.vscode/
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
 # ===== Go 编译产物 =====
 *.exe
 *.exe~
@@ -7,14 +25,27 @@
 *.test
 *.out
 *.test.exe
+coverage.out
+coverage.html
+*.coverprofile
 
 # ===== 构建目录 =====
 /bin/
 /build/
+dist/
+tmp/
+temp/
 
 # ===== 环境 =====
 .env
+.env.*
+!.env.example
 *.log
 
 # ===== 依赖缓存 =====
 /vendor/
+
+# ===== 本项目运行数据 =====
+distributed-fs/*_network/
+distributed-fs/ggnetwork/
+distributed-fs/bin/
