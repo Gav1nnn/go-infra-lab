@@ -83,6 +83,11 @@ func (c *MetadataCoordinator) FinishReplication(taskID string) (FileMetadata, Re
 	return meta, task, nil
 }
 
+// StartReplication marks a copy task running before a worker copies data.
+func (c *MetadataCoordinator) StartReplication(taskID string) (ReplicationTask, error) {
+	return c.tasks.MarkRunning(taskID)
+}
+
 // FailReplication marks a copy task failed and records the target replica missing.
 func (c *MetadataCoordinator) FailReplication(taskID string) (FileMetadata, ReplicationTask, error) {
 	task, err := c.tasks.MarkFailed(taskID)
