@@ -1,108 +1,165 @@
 # Distributed FS
 
-一个基于 Go 实现的 P2P 分布式文件存储系统原型。项目重点在于实现分布式存储的核心链路：节点连接、消息分发、文件流传输、本地 CAS 存储和加密传输。
+一个基于 Go 实现的分布式文件存储项目。项目从 P2P 文件传输原型演进而来，当前重点是构建一个“元数据准确、数据副本最终一致、多副本容错”的小型分布式文件系统。
 
 ## Features
 
-- 基于 TCP 的 P2P 网络层，使用 `Transport` / `Peer` 接口隔离上层逻辑和底层传输实现。
-- 自定义消息协议，通过首字节区分控制消息和文件流。
-- 使用 gob 编码控制消息，文件内容直接通过 TCP stream 传输。
-- 基于 `io.Reader` / `io.Writer` 实现流式读写，避免一次性加载完整文件。
-- 使用 `io.TeeReader` 同时写入本地磁盘和缓存网络发送数据。
-- 使用 `io.MultiWriter` 向多个 peer 广播文件流。
-- 使用 `io.LimitReader` 限制流读取长度，避免 TCP 连接阻塞。
-- 基于 SHA-1 的 CAS 风格目录结构，降低单目录文件数量。
-- 使用 AES-CTR 对文件流进行加密传输。
+- 中心化 metadata control plane，记录文件版本、副本状态、checksum、primary replica 和 tombstone。
+- 多副本最终一致：写入 primary 成功后发布 metadata，secondary replica 由后台 worker 异步复制。
+- 副本状态机：`pending` / `healthy` / `stale` / `missing` / `deleted`。
+- 节点状态机：`healthy` / `down`，storage node 通过 heartbeat 刷新状态。
+- 读取时优先 primary，primary 不可读时降级读取其他 healthy replica。
+- 复制 worker 支持 pending task、失败标记 missing、repair task 重新入队。
+- HTTP API + CLI + Docker Compose demo。
+- 保留原 P2P demo，作为早期传输层原型和后续演进基础。
 
 ## Architecture
 
 ```text
-main.go
-  |
-  v
-FileServer
-  |-- Store: local CAS storage
-  |-- Transport: P2P network abstraction
-  |-- Crypto: stream encryption/decryption
-  |
-  v
-p2p.TCPTransport
-  |-- listen / dial
-  |-- decode control messages
-  |-- coordinate file stream reads
+CLI / HTTP Client
+        |
+        v
+Manager
+  |-- MetadataCoordinator
+  |-- MetadataStore
+  |-- ReplicationPlanner
+  |-- ReplicationTaskQueue
+  |-- ReplicationWorker
+        |
+        v
+Storage Nodes
+  |-- HTTP object API
+  |-- LocalObjectStore
+  |-- Store (CAS layout)
 ```
 
-## Data Flow
+## Consistency Model
 
-### Store
+本项目不做强一致和 quorum。当前语义是：
+
+- Metadata 是权威控制面。
+- 数据副本允许短暂不一致。
+- `Put` 先写 primary object，primary 成功后再发布 metadata。
+- secondary replicas 初始为 `pending`。
+- 后台 replication loop 将 pending/missing/stale 副本修复为 `healthy`。
+- `Get` 只读取 metadata 中标记为 `healthy` 的副本，并校验 checksum。
+
+一句话总结：
 
 ```text
-client reader
-  |
-  v
-io.TeeReader
-  |-----------------> local Store.Write()
-  |
-  v
-file buffer -> AES-CTR encrypt -> peer stream
+metadata accurate, replicas eventually consistent
 ```
 
-### Get
-
-```text
-check local store
-  |
-  |-- hit  -> return local file reader
-  |
-  |-- miss -> broadcast MessageGetFile
-              receive encrypted stream
-              decrypt and cache locally
-              return local file reader
-```
-
-## Run
+## Run With Docker Compose
 
 ```bash
-make run
+make compose-up
 ```
 
-The demo starts three nodes:
+另开一个终端：
 
-```text
-:3000
-:7000
-:5000
+```bash
+make build
+./bin/fs nodes
+printf "hello dfs\n" > input.txt
+./bin/fs put demo.txt input.txt
+sleep 2
+./bin/fs stat demo.txt
+./bin/fs get demo.txt output.txt
+cat output.txt
+./bin/fs delete demo.txt
 ```
 
-Node `:5000` connects to `:3000` and `:7000`, stores files, removes its local copy, and fetches the files back from the network.
+或者直接运行：
 
-## Test
+```bash
+make demo
+```
+
+停止并清理：
+
+```bash
+make compose-down
+```
+
+## CLI
+
+```bash
+fs put [-manager http://127.0.0.1:9000] <key> <path>
+fs get [-manager http://127.0.0.1:9000] <key> <out>
+fs delete [-manager http://127.0.0.1:9000] <key>
+fs stat [-manager http://127.0.0.1:9000] <key>
+fs nodes [-manager http://127.0.0.1:9000]
+```
+
+## HTTP API
+
+Manager:
+
+- `PUT /files/{key}`
+- `GET /files/{key}`
+- `DELETE /files/{key}`
+- `GET /files/{key}/metadata`
+- `GET /nodes`
+- `POST /replication/run`
+
+Storage node:
+
+- `PUT /objects/{key}?version={version}`
+- `GET /objects/{key}?version={version}`
+- `HEAD /objects/{key}?version={version}`
+- `DELETE /objects/{key}?version={version}`
+
+## Local Development
 
 ```bash
 make test
+make build
 ```
 
-or:
+如果本机 Go build cache 权限受限：
 
 ```bash
-go test ./...
+GOCACHE=/private/tmp/dfs-go-build go test ./...
+GOCACHE=/private/tmp/dfs-go-build go build ./...
 ```
 
-## Project Notes
+## Manual Run
 
-This project is intended as a learning-oriented distributed storage prototype rather than a production-ready storage system. The current implementation is useful for demonstrating:
+启动 storage nodes：
 
-- Go interface-oriented design.
-- TCP network programming.
-- Stream-oriented file processing.
-- Basic distributed node communication.
-- Local content-addressed storage layout.
-- Encrypted file transfer.
+```bash
+./bin/fs storage -id node1 -addr :9101 -root data/node1 -manager http://127.0.0.1:9000
+./bin/fs storage -id node2 -addr :9102 -root data/node2 -manager http://127.0.0.1:9000
+./bin/fs storage -id node3 -addr :9103 -root data/node3 -manager http://127.0.0.1:9000
+```
 
-Potential improvements:
+启动 manager：
 
-- Add length-prefixed messages to make the TCP protocol more robust.
-- Add request timeout and error response messages.
-- Add a CLI or HTTP API for `put` / `get` / `delete`.
-- Add replication metadata and multi-node integration tests.
-- Add Docker Compose for launching multiple local nodes.
+```bash
+./bin/fs manager \
+  -node node1=http://127.0.0.1:9101 \
+  -node node2=http://127.0.0.1:9102 \
+  -node node3=http://127.0.0.1:9103
+```
+
+原始 P2P demo：
+
+```bash
+./bin/fs p2p-demo
+```
+
+## Interview Notes
+
+可以重点讲：
+
+- 为什么不直接做强一致：项目目标是多副本容错和最终一致，复杂度更适合秋招项目落地。
+- 为什么 metadata 要准确：读取、修复、删除都依赖 metadata 作为权威控制面。
+- 为什么 `Put` 要先写 primary 再发布 metadata：避免 metadata 指向不存在的数据。
+- 异步复制如何工作：pending task -> worker -> remote object copy -> replica healthy。
+- 故障时如何处理：读失败标记 missing/stale，repair loop 后续重新复制。
+- 后续演进：
+  - metadata manager 用 Raft 做高可用。
+  - 整文件副本升级为 chunk-based storage。
+  - P2P transport 替换当前 HTTP object copy。
+  - repair worker 增加限速、重试退避和任务持久化。

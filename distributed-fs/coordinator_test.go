@@ -142,6 +142,28 @@ func TestMetadataCoordinatorDeleteFile(t *testing.T) {
 	}
 }
 
+func TestMetadataCoordinatorPlanRepair(t *testing.T) {
+	c := newTestCoordinator()
+	c.RegisterNode("node1", ":3000")
+	c.RegisterNode("node2", ":5000")
+
+	plan, err := c.BeginWrite("foo.txt", 12, "checksum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.FailReplication(plan.Tasks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := c.PlanRepair()
+	if len(tasks) != 1 {
+		t.Fatalf("have %d repair tasks want 1", len(tasks))
+	}
+	if tasks[0].Target != "node2" {
+		t.Fatalf("have target %s want node2", tasks[0].Target)
+	}
+}
+
 func newTestCoordinator() *MetadataCoordinator {
 	c := NewMetadataCoordinator(3)
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)

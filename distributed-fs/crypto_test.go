@@ -20,8 +20,8 @@ func TestCopyEncryptDecrypt(t *testing.T) {
 		t.Error(err)
 	}
 
-	fmt.Println(len(payload))       // original length: 11
-	fmt.Println(len(dst.String()))  // encrypted length: 11 + 16 (IV) = 27
+	fmt.Println(len(payload))      // original length: 11
+	fmt.Println(len(dst.String())) // encrypted length: 11 + 16 (IV) = 27
 
 	// Decrypt back
 	out := new(bytes.Buffer)

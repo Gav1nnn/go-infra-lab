@@ -122,19 +122,28 @@ func (m *MetadataStore) HealthyNodes() []NodeMetadata {
 	return nodes
 }
 
+// Nodes returns all known nodes sorted by node ID.
+func (m *MetadataStore) Nodes() []NodeMetadata {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	nodes := make([]NodeMetadata, 0, len(m.nodes))
+	for _, node := range m.nodes {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].ID < nodes[j].ID
+	})
+	return nodes
+}
+
 // BeginFileVersion records a new primary replica and pending secondary replicas.
 func (m *MetadataStore) BeginFileVersion(key string, size int64, checksum, primary string, replicas []string) FileMetadata {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := m.now().UTC()
-	prev, ok := m.files[key]
-	version := uint64(1)
-	createdAt := now
-	if ok {
-		version = prev.Version + 1
-		createdAt = prev.CreatedAt
-	}
+	version, createdAt := m.nextVersionLocked(key, now)
 
 	meta := FileMetadata{
 		Key:       key,
@@ -162,6 +171,15 @@ func (m *MetadataStore) BeginFileVersion(key string, size int64, checksum, prima
 
 	m.files[key] = meta
 	return cloneFileMetadata(meta)
+}
+
+// NextVersion returns the next version number for a file key.
+func (m *MetadataStore) NextVersion(key string) uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	version, _ := m.nextVersionLocked(key, m.now().UTC())
+	return version
 }
 
 // MarkReplica updates a single replica state.
@@ -225,6 +243,42 @@ func (m *MetadataStore) GetFile(key string) (FileMetadata, bool) {
 	return cloneFileMetadata(meta), true
 }
 
+// ListFiles returns all file metadata records.
+func (m *MetadataStore) ListFiles() []FileMetadata {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	files := make([]FileMetadata, 0, len(m.files))
+	for _, meta := range m.files {
+		files = append(files, cloneFileMetadata(meta))
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Key < files[j].Key
+	})
+	return files
+}
+
+// AddReplica records a new replica target for an existing file.
+func (m *MetadataStore) AddReplica(key, nodeID string, state ReplicaState) (FileMetadata, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	meta, ok := m.files[key]
+	if !ok {
+		return FileMetadata{}, ErrMetadataNotFound
+	}
+
+	now := m.now().UTC()
+	meta.Replicas[nodeID] = ReplicaMetadata{
+		NodeID:    nodeID,
+		State:     state,
+		UpdatedAt: now,
+	}
+	meta.UpdatedAt = now
+	m.files[key] = meta
+	return cloneFileMetadata(meta), nil
+}
+
 // HealthyReplicas returns healthy replicas sorted by node ID.
 func (m FileMetadata) HealthyReplicas() []ReplicaMetadata {
 	replicas := make([]ReplicaMetadata, 0, len(m.Replicas))
@@ -246,4 +300,12 @@ func cloneFileMetadata(meta FileMetadata) FileMetadata {
 	}
 	meta.Replicas = replicas
 	return meta
+}
+
+func (m *MetadataStore) nextVersionLocked(key string, now time.Time) (uint64, time.Time) {
+	prev, ok := m.files[key]
+	if !ok {
+		return 1, now
+	}
+	return prev.Version + 1, prev.CreatedAt
 }

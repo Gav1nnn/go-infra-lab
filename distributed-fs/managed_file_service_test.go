@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -40,6 +41,20 @@ func TestManagedFileServicePutGet(t *testing.T) {
 	}
 	if gotMeta.Version != 1 {
 		t.Fatalf("have version %d want 1", gotMeta.Version)
+	}
+}
+
+func TestManagedFileServicePutDoesNotPublishMetadataOnPrimaryWriteFailure(t *testing.T) {
+	objects := &failingObjectStore{err: fmt.Errorf("write failed")}
+	svc := NewManagedFileService(1, objects)
+	svc.RegisterNode("node1", ":3000")
+
+	if _, err := svc.Put("foo.txt", bytes.NewReader([]byte("data"))); err == nil {
+		t.Fatalf("expected put to fail")
+	}
+
+	if _, ok := svc.Metadata("foo.txt"); ok {
+		t.Fatalf("metadata should not be published when primary write fails")
 	}
 }
 
@@ -137,4 +152,24 @@ func newTestManagedFileService(t *testing.T, replicaCount int) *ManagedFileServi
 		PathTransformFunc: CASPathTransformFunc,
 	})
 	return NewManagedFileService(replicaCount, NewLocalObjectStore(store))
+}
+
+type failingObjectStore struct {
+	err error
+}
+
+func (s *failingObjectStore) WriteObject(nodeID, key string, version uint64, r io.Reader) (int64, error) {
+	return 0, s.err
+}
+
+func (s *failingObjectStore) ReadObject(nodeID, key string, version uint64) (int64, io.ReadCloser, error) {
+	return 0, nil, s.err
+}
+
+func (s *failingObjectStore) DeleteObject(nodeID, key string, version uint64) error {
+	return nil
+}
+
+func (s *failingObjectStore) HasObject(nodeID, key string, version uint64) bool {
+	return false
 }

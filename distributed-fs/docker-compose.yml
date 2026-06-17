@@ -1,0 +1,77 @@
+services:
+  manager:
+    build: .
+    command:
+      - manager
+      - -addr
+      - :9000
+      - -node
+      - node1=http://storage1:9101
+      - -node
+      - node2=http://storage2:9102
+      - -node
+      - node3=http://storage3:9103
+    ports:
+      - "9000:9000"
+
+  storage1:
+    build: .
+    command:
+      - storage
+      - -id
+      - node1
+      - -addr
+      - :9101
+      - -advertise
+      - http://storage1:9101
+      - -manager
+      - http://manager:9000
+      - -root
+      - /data
+    depends_on:
+      - manager
+    volumes:
+      - storage1-data:/data
+
+  storage2:
+    build: .
+    command:
+      - storage
+      - -id
+      - node2
+      - -addr
+      - :9102
+      - -advertise
+      - http://storage2:9102
+      - -manager
+      - http://manager:9000
+      - -root
+      - /data
+    depends_on:
+      - manager
+    volumes:
+      - storage2-data:/data
+
+  storage3:
+    build: .
+    command:
+      - storage
+      - -id
+      - node3
+      - -addr
+      - :9103
+      - -advertise
+      - http://storage3:9103
+      - -manager
+      - http://manager:9000
+      - -root
+      - /data
+    depends_on:
+      - manager
+    volumes:
+      - storage3-data:/data
+
+volumes:
+  storage1-data:
+  storage2-data:
+  storage3-data:

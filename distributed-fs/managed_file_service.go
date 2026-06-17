@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"time"
 )
 
 // ManagedFileService is a single-process file service built on metadata and object storage.
@@ -34,12 +35,18 @@ func (s *ManagedFileService) Put(key string, r io.Reader) (FileMetadata, error) 
 		return FileMetadata{}, err
 	}
 
-	plan, err := s.coordinator.BeginWrite(key, int64(len(data)), checksumBytes(data))
+	prepared, err := s.coordinator.PrepareWrite(key, int64(len(data)), checksumBytes(data))
 	if err != nil {
 		return FileMetadata{}, err
 	}
 
-	if _, err := s.objects.WriteObject(plan.Primary.ID, key, plan.Metadata.Version, bytes.NewReader(data)); err != nil {
+	if _, err := s.objects.WriteObject(prepared.Primary.ID, key, prepared.Version, bytes.NewReader(data)); err != nil {
+		return FileMetadata{}, err
+	}
+
+	plan, err := s.coordinator.CommitWrite(prepared)
+	if err != nil {
+		s.objects.DeleteObject(prepared.Primary.ID, key, prepared.Version)
 		return FileMetadata{}, err
 	}
 
@@ -107,4 +114,19 @@ func (s *ManagedFileService) Metadata(key string) (FileMetadata, bool) {
 // PendingTasks returns pending async copy tasks.
 func (s *ManagedFileService) PendingTasks() []ReplicationTask {
 	return s.coordinator.PendingTasks()
+}
+
+// PlanRepair enqueues repair tasks for missing or stale replicas.
+func (s *ManagedFileService) PlanRepair() []ReplicationTask {
+	return s.coordinator.PlanRepair()
+}
+
+// MarkExpiredNodes marks nodes as down when heartbeats expire.
+func (s *ManagedFileService) MarkExpiredNodes(ttl time.Duration) {
+	s.coordinator.metadata.MarkExpiredNodes(ttl)
+}
+
+// Nodes returns all nodes known by the metadata coordinator.
+func (s *ManagedFileService) Nodes() []NodeMetadata {
+	return s.coordinator.metadata.Nodes()
 }

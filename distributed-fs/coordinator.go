@@ -15,6 +15,16 @@ type WritePlan struct {
 	Tasks    []ReplicationTask
 }
 
+// PreparedWrite describes a write before it is published to metadata.
+type PreparedWrite struct {
+	Key      string
+	Version  uint64
+	Size     int64
+	Checksum string
+	Primary  NodeMetadata
+	Replicas []NodeMetadata
+}
+
 // ReadPlan describes which replicas can serve the latest readable version.
 type ReadPlan struct {
 	Metadata FileMetadata
@@ -42,19 +52,31 @@ func (c *MetadataCoordinator) RegisterNode(id, addr string) NodeMetadata {
 	return c.metadata.UpsertNode(id, addr)
 }
 
-// BeginWrite creates metadata for a new version and queues async replica work.
-func (c *MetadataCoordinator) BeginWrite(key string, size int64, checksum string) (WritePlan, error) {
+// PrepareWrite chooses replicas without publishing readable metadata.
+func (c *MetadataCoordinator) PrepareWrite(key string, size int64, checksum string) (PreparedWrite, error) {
 	plan, err := c.planner.Plan(c.metadata.HealthyNodes())
 	if err != nil {
-		return WritePlan{}, err
+		return PreparedWrite{}, err
 	}
 
-	replicaIDs := make([]string, 0, len(plan.Replicas))
-	for _, node := range plan.Replicas {
+	return PreparedWrite{
+		Key:      key,
+		Version:  c.metadata.NextVersion(key),
+		Size:     size,
+		Checksum: checksum,
+		Primary:  plan.Primary,
+		Replicas: plan.Replicas,
+	}, nil
+}
+
+// CommitWrite publishes metadata after the primary object has been written.
+func (c *MetadataCoordinator) CommitWrite(prepared PreparedWrite) (WritePlan, error) {
+	replicaIDs := make([]string, 0, len(prepared.Replicas))
+	for _, node := range prepared.Replicas {
 		replicaIDs = append(replicaIDs, node.ID)
 	}
 
-	meta := c.metadata.BeginFileVersion(key, size, checksum, plan.Primary.ID, replicaIDs)
+	meta := c.metadata.BeginFileVersion(prepared.Key, prepared.Size, prepared.Checksum, prepared.Primary.ID, replicaIDs)
 	tasks, err := TasksForFile(meta, c.metadata.now())
 	if err != nil {
 		return WritePlan{}, err
@@ -63,10 +85,19 @@ func (c *MetadataCoordinator) BeginWrite(key string, size int64, checksum string
 
 	return WritePlan{
 		Metadata: meta,
-		Primary:  plan.Primary,
-		Replicas: plan.Replicas,
+		Primary:  prepared.Primary,
+		Replicas: prepared.Replicas,
 		Tasks:    tasks,
 	}, nil
+}
+
+// BeginWrite creates metadata for a new version and queues async replica work.
+func (c *MetadataCoordinator) BeginWrite(key string, size int64, checksum string) (WritePlan, error) {
+	prepared, err := c.PrepareWrite(key, size, checksum)
+	if err != nil {
+		return WritePlan{}, err
+	}
+	return c.CommitWrite(prepared)
 }
 
 // FinishReplication marks a copy task done and makes the target replica healthy.
@@ -133,6 +164,82 @@ func (c *MetadataCoordinator) PendingTasks() []ReplicationTask {
 	return c.tasks.Pending()
 }
 
+// PlanRepair scans metadata and enqueues tasks for missing or stale replicas.
+func (c *MetadataCoordinator) PlanRepair() []ReplicationTask {
+	nodes := c.metadata.HealthyNodes()
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	tasks := []ReplicationTask{}
+	for _, meta := range c.metadata.ListFiles() {
+		if meta.Deleted {
+			continue
+		}
+
+		source := firstHealthyReplica(meta)
+		if source == "" {
+			continue
+		}
+
+		tasks = append(tasks, c.repairExistingReplicas(meta, source)...)
+		tasks = append(tasks, c.repairMissingReplicas(meta, source, nodes)...)
+	}
+
+	c.tasks.Enqueue(tasks...)
+	return tasks
+}
+
+func (c *MetadataCoordinator) repairExistingReplicas(meta FileMetadata, source string) []ReplicationTask {
+	tasks := []ReplicationTask{}
+	for nodeID, replica := range meta.Replicas {
+		if nodeID == source || replica.State == ReplicaHealthy || replica.State == ReplicaDeleted {
+			continue
+		}
+		tasks = append(tasks, ReplicationTask{
+			ID:        replicationTaskID(meta.Key, meta.Version, source, nodeID),
+			Key:       meta.Key,
+			Version:   meta.Version,
+			Checksum:  meta.Checksum,
+			Source:    source,
+			Target:    nodeID,
+			State:     ReplicationTaskPending,
+			CreatedAt: c.metadata.now().UTC(),
+			UpdatedAt: c.metadata.now().UTC(),
+		})
+	}
+	return tasks
+}
+
+func (c *MetadataCoordinator) repairMissingReplicas(meta FileMetadata, source string, nodes []NodeMetadata) []ReplicationTask {
+	tasks := []ReplicationTask{}
+	if len(meta.Replicas) >= c.planner.ReplicaCount {
+		return tasks
+	}
+
+	for _, node := range nodes {
+		if len(meta.Replicas)+len(tasks) >= c.planner.ReplicaCount {
+			break
+		}
+		if _, ok := meta.Replicas[node.ID]; ok {
+			continue
+		}
+		c.metadata.AddReplica(meta.Key, node.ID, ReplicaPending)
+		tasks = append(tasks, ReplicationTask{
+			ID:        replicationTaskID(meta.Key, meta.Version, source, node.ID),
+			Key:       meta.Key,
+			Version:   meta.Version,
+			Checksum:  meta.Checksum,
+			Source:    source,
+			Target:    node.ID,
+			State:     ReplicationTaskPending,
+			CreatedAt: c.metadata.now().UTC(),
+			UpdatedAt: c.metadata.now().UTC(),
+		})
+	}
+	return tasks
+}
+
 func prioritizePrimary(meta FileMetadata, replicas []ReplicaMetadata) []ReplicaMetadata {
 	if len(replicas) == 0 || meta.Primary == "" {
 		return replicas
@@ -151,4 +258,12 @@ func prioritizePrimary(meta FileMetadata, replicas []ReplicaMetadata) []ReplicaM
 		}
 	}
 	return out
+}
+
+func firstHealthyReplica(meta FileMetadata) string {
+	replicas := meta.HealthyReplicas()
+	if len(replicas) == 0 {
+		return ""
+	}
+	return replicas[0].NodeID
 }
