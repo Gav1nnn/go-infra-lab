@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"testing"
-	"time"
 )
 
 func TestLocalObjectStoreWriteRead(t *testing.T) {
@@ -104,10 +103,7 @@ func TestLocalObjectReplicatorChecksumMismatch(t *testing.T) {
 }
 
 func TestReplicationWorkerWithLocalObjectReplicator(t *testing.T) {
-	c := NewMetadataCoordinator(3)
-	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
-	c.metadata.now = func() time.Time { return now }
-	c.tasks.now = func() time.Time { return now }
+	c := newTestCoordinator()
 
 	c.RegisterNode("node1", ":3000")
 	c.RegisterNode("node2", ":5000")
@@ -135,7 +131,10 @@ func TestReplicationWorkerWithLocalObjectReplicator(t *testing.T) {
 		t.Fatalf("target object should exist")
 	}
 
-	meta, ok := c.metadata.GetFile("foo.txt")
+	meta, ok, err := c.metadata.GetFile("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("metadata should exist")
 	}

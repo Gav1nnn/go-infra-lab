@@ -5,6 +5,7 @@
 ## Features
 
 - 中心化 metadata control plane，记录文件版本、副本状态、checksum、primary replica 和 tombstone。
+- Manager 使用 bbolt 持久化 metadata，重启后可以恢复文件版本、副本状态和 tombstone。
 - 多副本最终一致：写入 primary 成功后发布 metadata，secondary replica 由后台 worker 异步复制。
 - 副本状态机：`pending` / `healthy` / `stale` / `missing` / `deleted`。
 - 节点状态机：`healthy` / `down`，storage node 通过 heartbeat 刷新状态。
@@ -101,6 +102,7 @@ Manager:
 - `DELETE /files/{key}`
 - `GET /files/{key}/metadata`
 - `GET /nodes`
+- `GET /metrics`
 - `POST /replication/run`
 
 Storage node:
@@ -138,6 +140,7 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 
 ```bash
 ./bin/fs manager \
+  -metadata-db data/manager/metadata.db \
   -node node1=http://127.0.0.1:9101 \
   -node node2=http://127.0.0.1:9102 \
   -node node3=http://127.0.0.1:9103
@@ -158,6 +161,10 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 - 为什么 `Put` 要先写 primary 再发布 metadata：避免 metadata 指向不存在的数据。
 - 异步复制如何工作：pending task -> worker -> remote object copy -> replica healthy。
 - 故障时如何处理：读失败标记 missing/stale，repair loop 后续重新复制。
+- 监控和报错机制：
+  - manager/storage 都提供 `/healthz`。
+  - manager 提供 `/metrics`，返回文件数、删除文件数、pending task 数、节点状态和副本状态分布。
+  - 后台 heartbeat、repair、replication loop 使用 `log.Printf` 输出错误。
 - 后续演进：
   - metadata manager 用 Raft 做高可用。
   - 整文件副本升级为 chunk-based storage。

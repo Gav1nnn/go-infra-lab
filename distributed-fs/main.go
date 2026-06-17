@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -73,6 +74,7 @@ func main() {
 func runManager(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("manager", flag.ExitOnError)
 	addr := fs.String("addr", ":9000", "HTTP listen address")
+	metadataDB := fs.String("metadata-db", "data/manager/metadata.db", "bbolt metadata database path")
 	replicas := fs.Int("replicas", defaultReplicaCount, "replica count")
 	nodes := nodeFlags{}
 	fs.Var(nodes, "node", "storage node id=url")
@@ -83,10 +85,21 @@ func runManager(ctx context.Context, args []string) error {
 		return fmt.Errorf("at least one -node id=url is required")
 	}
 
+	if err := os.MkdirAll(filepath.Dir(*metadataDB), 0755); err != nil {
+		return err
+	}
+	metadata, err := OpenDiskMetadataStore(*metadataDB)
+	if err != nil {
+		return err
+	}
+	defer metadata.Close()
+
 	objects := NewHTTPObjectStore(nodes)
-	service := NewManagedFileService(*replicas, objects)
+	service := NewManagedFileServiceWithMetadata(*replicas, objects, metadata)
 	for id, addr := range nodes {
-		service.RegisterNode(id, addr)
+		if _, err := service.RegisterNode(id, addr); err != nil {
+			return err
+		}
 	}
 
 	go managerLoop(ctx, service)
@@ -98,7 +111,7 @@ func runManager(ctx context.Context, args []string) error {
 	go shutdownServer(ctx, srv)
 
 	log.Printf("manager listening on %s", *addr)
-	err := srv.ListenAndServe()
+	err = srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -253,8 +266,12 @@ func managerLoop(ctx context.Context, service *ManagedFileService) {
 	for {
 		select {
 		case <-ticker.C:
-			service.MarkExpiredNodes(10 * time.Second)
-			service.PlanRepair()
+			if err := service.MarkExpiredNodes(10 * time.Second); err != nil {
+				log.Printf("mark expired nodes failed: %v", err)
+			}
+			if _, err := service.PlanRepair(); err != nil {
+				log.Printf("plan repair failed: %v", err)
+			}
 			for {
 				if _, err := service.RunReplicationOnce(); err != nil {
 					break
@@ -346,7 +363,7 @@ func printJSON(endpoint string) error {
 
 func usage() {
 	fmt.Println(`usage:
-  fs manager -node node1=http://127.0.0.1:9101 [-addr :9000]
+  fs manager -node node1=http://127.0.0.1:9101 [-addr :9000] [-metadata-db data/manager/metadata.db]
   fs storage -id node1 [-addr :9101] [-root data/node1] [-manager http://127.0.0.1:9000]
   fs put [-manager http://127.0.0.1:9000] <key> <path>
   fs get [-manager http://127.0.0.1:9000] <key> <out>

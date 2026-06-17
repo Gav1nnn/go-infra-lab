@@ -3,19 +3,35 @@ package main
 import (
 	"bytes"
 	"io"
+	"sync"
 	"time"
 )
+
+// ServiceMetrics summarizes manager state for observability.
+type ServiceMetrics struct {
+	Files        int                  `json:"files"`
+	DeletedFiles int                  `json:"deletedFiles"`
+	PendingTasks int                  `json:"pendingTasks"`
+	Nodes        map[NodeState]int    `json:"nodes"`
+	Replicas     map[ReplicaState]int `json:"replicas"`
+}
 
 // ManagedFileService is a single-process file service built on metadata and object storage.
 type ManagedFileService struct {
 	coordinator *MetadataCoordinator
 	objects     ObjectStore
 	worker      *ReplicationWorker
+	writeLock   sync.Mutex
 }
 
 // NewManagedFileService creates a service for local integration and future APIs.
 func NewManagedFileService(replicaCount int, objects ObjectStore) *ManagedFileService {
-	coordinator := NewMetadataCoordinator(replicaCount)
+	return NewManagedFileServiceWithMetadata(replicaCount, objects, NewMemoryMetadataBackend(NewMetadataStore()))
+}
+
+// NewManagedFileServiceWithMetadata creates a service with a custom metadata backend.
+func NewManagedFileServiceWithMetadata(replicaCount int, objects ObjectStore, metadata MetadataBackend) *ManagedFileService {
+	coordinator := NewMetadataCoordinatorWithBackend(replicaCount, metadata)
 	return &ManagedFileService{
 		coordinator: coordinator,
 		objects:     objects,
@@ -24,12 +40,15 @@ func NewManagedFileService(replicaCount int, objects ObjectStore) *ManagedFileSe
 }
 
 // RegisterNode records a storage node that can store objects.
-func (s *ManagedFileService) RegisterNode(id, addr string) NodeMetadata {
+func (s *ManagedFileService) RegisterNode(id, addr string) (NodeMetadata, error) {
 	return s.coordinator.RegisterNode(id, addr)
 }
 
 // Put writes a file to the primary replica and queues async secondary copies.
 func (s *ManagedFileService) Put(key string, r io.Reader) (FileMetadata, error) {
+	s.writeLock.Lock()
+	defer s.writeLock.Unlock()
+
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return FileMetadata{}, err
@@ -85,7 +104,13 @@ func (s *ManagedFileService) Get(key string) (io.ReadCloser, FileMetadata, error
 
 // Delete writes a tombstone and removes known local object copies best-effort.
 func (s *ManagedFileService) Delete(key string) (FileMetadata, error) {
-	meta, ok := s.coordinator.metadata.GetFile(key)
+	s.writeLock.Lock()
+	defer s.writeLock.Unlock()
+
+	meta, ok, err := s.coordinator.metadata.GetFile(key)
+	if err != nil {
+		return FileMetadata{}, err
+	}
 	if !ok {
 		return FileMetadata{}, ErrMetadataNotFound
 	}
@@ -107,7 +132,7 @@ func (s *ManagedFileService) RunReplicationOnce() (ReplicationTask, error) {
 }
 
 // Metadata returns the authoritative metadata for a file.
-func (s *ManagedFileService) Metadata(key string) (FileMetadata, bool) {
+func (s *ManagedFileService) Metadata(key string) (FileMetadata, bool, error) {
 	return s.coordinator.metadata.GetFile(key)
 }
 
@@ -117,16 +142,47 @@ func (s *ManagedFileService) PendingTasks() []ReplicationTask {
 }
 
 // PlanRepair enqueues repair tasks for missing or stale replicas.
-func (s *ManagedFileService) PlanRepair() []ReplicationTask {
+func (s *ManagedFileService) PlanRepair() ([]ReplicationTask, error) {
 	return s.coordinator.PlanRepair()
 }
 
 // MarkExpiredNodes marks nodes as down when heartbeats expire.
-func (s *ManagedFileService) MarkExpiredNodes(ttl time.Duration) {
-	s.coordinator.metadata.MarkExpiredNodes(ttl)
+func (s *ManagedFileService) MarkExpiredNodes(ttl time.Duration) error {
+	return s.coordinator.metadata.MarkExpiredNodes(ttl)
 }
 
 // Nodes returns all nodes known by the metadata coordinator.
-func (s *ManagedFileService) Nodes() []NodeMetadata {
+func (s *ManagedFileService) Nodes() ([]NodeMetadata, error) {
 	return s.coordinator.metadata.Nodes()
+}
+
+// Metrics returns a compact view of manager health.
+func (s *ManagedFileService) Metrics() (ServiceMetrics, error) {
+	nodes, err := s.coordinator.metadata.Nodes()
+	if err != nil {
+		return ServiceMetrics{}, err
+	}
+	files, err := s.coordinator.metadata.ListFiles()
+	if err != nil {
+		return ServiceMetrics{}, err
+	}
+
+	metrics := ServiceMetrics{
+		PendingTasks: len(s.PendingTasks()),
+		Nodes:        make(map[NodeState]int),
+		Replicas:     make(map[ReplicaState]int),
+	}
+	for _, node := range nodes {
+		metrics.Nodes[node.State]++
+	}
+	for _, file := range files {
+		metrics.Files++
+		if file.Deleted {
+			metrics.DeletedFiles++
+		}
+		for _, replica := range file.Replicas {
+			metrics.Replicas[replica.State]++
+		}
+	}
+	return metrics, nil
 }

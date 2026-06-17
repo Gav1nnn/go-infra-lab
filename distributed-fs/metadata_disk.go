@@ -88,6 +88,22 @@ func (m *DiskMetadataStore) MarkExpiredNodes(ttl time.Duration) error {
 
 // HealthyNodes returns nodes that can accept reads, writes, and repair work.
 func (m *DiskMetadataStore) HealthyNodes() ([]NodeMetadata, error) {
+	all, err := m.Nodes()
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := []NodeMetadata{}
+	for _, node := range all {
+		if node.State == NodeHealthy {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes, nil
+}
+
+// Nodes returns all known nodes sorted by node ID.
+func (m *DiskMetadataStore) Nodes() ([]NodeMetadata, error) {
 	nodes := []NodeMetadata{}
 	err := m.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(metadataNodesBucket).ForEach(func(_, v []byte) error {
@@ -95,9 +111,7 @@ func (m *DiskMetadataStore) HealthyNodes() ([]NodeMetadata, error) {
 			if err := json.Unmarshal(v, &node); err != nil {
 				return err
 			}
-			if node.State == NodeHealthy {
-				nodes = append(nodes, node)
-			}
+			nodes = append(nodes, node)
 			return nil
 		})
 	})
@@ -153,6 +167,22 @@ func (m *DiskMetadataStore) BeginFileVersion(key string, size int64, checksum, p
 		return putMetadataJSON(b, key, meta)
 	})
 	return cloneFileMetadata(meta), err
+}
+
+// NextVersion returns the next version number for a file key.
+func (m *DiskMetadataStore) NextVersion(key string) (uint64, error) {
+	version := uint64(1)
+	err := m.db.View(func(tx *bolt.Tx) error {
+		meta, ok, err := getFileFromBucket(tx.Bucket(metadataFilesBucket), key)
+		if err != nil {
+			return err
+		}
+		if ok {
+			version = meta.Version + 1
+		}
+		return nil
+	})
+	return version, err
 }
 
 // MarkReplica updates a single replica state.
@@ -228,6 +258,59 @@ func (m *DiskMetadataStore) GetFile(key string) (FileMetadata, bool, error) {
 		return err
 	})
 	return cloneFileMetadata(meta), found, err
+}
+
+// ListFiles returns all file metadata records.
+func (m *DiskMetadataStore) ListFiles() ([]FileMetadata, error) {
+	files := []FileMetadata{}
+	err := m.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(metadataFilesBucket).ForEach(func(_, v []byte) error {
+			var meta FileMetadata
+			if err := json.Unmarshal(v, &meta); err != nil {
+				return err
+			}
+			files = append(files, cloneFileMetadata(meta))
+			return nil
+		})
+	})
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Key < files[j].Key
+	})
+	return files, err
+}
+
+// AddReplica records a new replica target for an existing file.
+func (m *DiskMetadataStore) AddReplica(key, nodeID string, state ReplicaState) (FileMetadata, error) {
+	var meta FileMetadata
+	err := m.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(metadataFilesBucket)
+
+		var ok bool
+		var err error
+		meta, ok, err = getFileFromBucket(b, key)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrMetadataNotFound
+		}
+
+		now := m.now().UTC()
+		meta.Replicas[nodeID] = ReplicaMetadata{
+			NodeID:    nodeID,
+			State:     state,
+			UpdatedAt: now,
+		}
+		meta.UpdatedAt = now
+
+		return putMetadataJSON(b, key, meta)
+	})
+	return cloneFileMetadata(meta), err
+}
+
+// Now returns the backend clock.
+func (m *DiskMetadataStore) Now() time.Time {
+	return m.now()
 }
 
 func getFileFromBucket(b *bolt.Bucket, key string) (FileMetadata, bool, error) {

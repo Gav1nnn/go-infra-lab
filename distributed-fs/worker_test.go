@@ -41,7 +41,10 @@ func TestReplicationWorkerSuccess(t *testing.T) {
 		t.Fatalf("have %d copied tasks want 1", len(replicator.tasks))
 	}
 
-	meta, ok := c.metadata.GetFile("foo.txt")
+	meta, ok, err := c.metadata.GetFile("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("metadata should exist")
 	}
@@ -74,7 +77,10 @@ func TestReplicationWorkerFailure(t *testing.T) {
 		t.Fatalf("have task state %s want failed", task.State)
 	}
 
-	meta, ok := c.metadata.GetFile("foo.txt")
+	meta, ok, err := c.metadata.GetFile("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("metadata should exist")
 	}

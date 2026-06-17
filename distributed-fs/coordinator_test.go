@@ -155,7 +155,10 @@ func TestMetadataCoordinatorPlanRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tasks := c.PlanRepair()
+	tasks, err := c.PlanRepair()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tasks) != 1 {
 		t.Fatalf("have %d repair tasks want 1", len(tasks))
 	}
@@ -165,9 +168,10 @@ func TestMetadataCoordinatorPlanRepair(t *testing.T) {
 }
 
 func newTestCoordinator() *MetadataCoordinator {
-	c := NewMetadataCoordinator(3)
+	store := NewMetadataStore()
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
-	c.metadata.now = func() time.Time { return now }
+	store.now = func() time.Time { return now }
+	c := NewMetadataCoordinatorWithBackend(3, NewMemoryMetadataBackend(store))
 	c.tasks.now = func() time.Time { return now }
 	return c
 }

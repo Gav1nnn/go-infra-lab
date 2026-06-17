@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path/filepath"
 	"testing"
 )
 
@@ -53,7 +54,9 @@ func TestManagedFileServicePutDoesNotPublishMetadataOnPrimaryWriteFailure(t *tes
 		t.Fatalf("expected put to fail")
 	}
 
-	if _, ok := svc.Metadata("foo.txt"); ok {
+	if _, ok, err := svc.Metadata("foo.txt"); err != nil {
+		t.Fatal(err)
+	} else if ok {
 		t.Fatalf("metadata should not be published when primary write fails")
 	}
 }
@@ -77,7 +80,10 @@ func TestManagedFileServiceReplication(t *testing.T) {
 		t.Fatalf("have task state %s want done", task.State)
 	}
 
-	meta, ok := svc.Metadata("foo.txt")
+	meta, ok, err := svc.Metadata("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("metadata should exist")
 	}
@@ -118,7 +124,10 @@ func TestManagedFileServiceReadsReplicaWhenPrimaryMissing(t *testing.T) {
 		t.Fatalf("have %s want %s", got, data)
 	}
 
-	updated, ok := svc.Metadata("foo.txt")
+	updated, ok, err := svc.Metadata("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("metadata should exist")
 	}
@@ -141,6 +150,55 @@ func TestManagedFileServiceDelete(t *testing.T) {
 
 	if _, _, err := svc.Get("foo.txt"); err != ErrFileDeleted {
 		t.Fatalf("have err %v want ErrFileDeleted", err)
+	}
+}
+
+func TestManagedFileServiceWithDiskMetadata(t *testing.T) {
+	root := t.TempDir()
+	objects := NewLocalObjectStore(NewStore(StoreOpts{
+		Root:              filepath.Join(root, "objects"),
+		PathTransformFunc: CASPathTransformFunc,
+	}))
+
+	metadata, err := OpenDiskMetadataStore(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewManagedFileServiceWithMetadata(2, objects, metadata)
+	svc.RegisterNode("node1", ":3000")
+	svc.RegisterNode("node2", ":5000")
+	if _, err := svc.Put("foo.txt", bytes.NewReader([]byte("persistent metadata"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenDiskMetadataStore(filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+
+	recovered := NewManagedFileServiceWithMetadata(2, objects, reopened)
+	meta, ok, err := recovered.Metadata("foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("metadata should be recovered after reopen")
+	}
+	if meta.Version != 1 {
+		t.Fatalf("have version %d want 1", meta.Version)
+	}
+
+	nodes, err := recovered.Nodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("have %d nodes want 2", len(nodes))
 	}
 }
 

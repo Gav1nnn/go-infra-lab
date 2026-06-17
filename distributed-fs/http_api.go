@@ -33,6 +33,8 @@ func (h *ManagerHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleFile(w, r)
 	case r.URL.Path == "/nodes":
 		h.handleNodes(w, r)
+	case r.URL.Path == "/metrics":
+		h.handleMetrics(w, r)
 	case r.URL.Path == "/replication/run":
 		h.handleReplicationRun(w, r)
 	case strings.HasPrefix(r.URL.Path, "/internal/nodes/"):
@@ -90,7 +92,11 @@ func (h *ManagerHTTPHandler) handleMetadata(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	meta, ok := h.service.Metadata(key)
+	meta, ok, err := h.service.Metadata(key)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if !ok {
 		writeAPIError(w, http.StatusNotFound, ErrMetadataNotFound)
 		return
@@ -103,7 +109,25 @@ func (h *ManagerHTTPHandler) handleNodes(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	writeAPIJSON(w, http.StatusOK, h.service.Nodes())
+	nodes, err := h.service.Nodes()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, nodes)
+}
+
+func (h *ManagerHTTPHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	metrics, err := h.service.Metrics()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, metrics)
 }
 
 func (h *ManagerHTTPHandler) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +153,11 @@ func (h *ManagerHTTPHandler) handleNodeHeartbeat(w http.ResponseWriter, r *http.
 		return
 	}
 
-	node := h.service.RegisterNode(id, req.Addr)
+	node, err := h.service.RegisterNode(id, req.Addr)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if h.httpStore != nil {
 		h.httpStore.SetNode(id, req.Addr)
 	}

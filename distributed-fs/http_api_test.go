@@ -64,6 +64,13 @@ func TestManagerHTTPHandler(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("have status %d want 200 body=%s", rec.Code, rec.Body.String())
 	}
+
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec = httptest.NewRecorder()
+	manager.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("have status %d want 200 body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestManagerHTTPHandlerNodeHeartbeat(t *testing.T) {
@@ -79,7 +86,10 @@ func TestManagerHTTPHandlerNodeHeartbeat(t *testing.T) {
 		t.Fatalf("have status %d want 200 body=%s", rec.Code, rec.Body.String())
 	}
 
-	nodes := service.Nodes()
+	nodes, err := service.Nodes()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(nodes) != 1 {
 		t.Fatalf("have %d nodes want 1", len(nodes))
 	}

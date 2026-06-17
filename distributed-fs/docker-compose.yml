@@ -5,6 +5,8 @@ services:
       - manager
       - -addr
       - :9000
+      - -metadata-db
+      - /data/metadata.db
       - -node
       - node1=http://storage1:9101
       - -node
@@ -13,6 +15,8 @@ services:
       - node3=http://storage3:9103
     ports:
       - "9000:9000"
+    volumes:
+      - manager-data:/data
 
   storage1:
     build: .
@@ -72,6 +76,7 @@ services:
       - storage3-data:/data
 
 volumes:
+  manager-data:
   storage1-data:
   storage2-data:
   storage3-data:
