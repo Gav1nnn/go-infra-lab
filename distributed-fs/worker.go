@@ -25,7 +25,10 @@ func NewReplicationWorker(coordinator *MetadataCoordinator, replicator ObjectRep
 
 // WorkOnce runs one pending replication task.
 func (w *ReplicationWorker) WorkOnce() (ReplicationTask, error) {
-	pending := w.coordinator.PendingTasks()
+	pending, err := w.coordinator.PendingTasks()
+	if err != nil {
+		return ReplicationTask{}, err
+	}
 	if len(pending) == 0 {
 		return ReplicationTask{}, ErrNoPendingTasks
 	}

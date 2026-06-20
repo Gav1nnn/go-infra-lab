@@ -105,7 +105,7 @@ func TestTasksForFileMissingPrimary(t *testing.T) {
 }
 
 func TestReplicationTaskQueue(t *testing.T) {
-	q := NewReplicationTaskQueue()
+	q := NewMemoryReplicationTaskQueue()
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	q.now = func() time.Time { return now }
 
@@ -119,9 +119,14 @@ func TestReplicationTaskQueue(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	q.Enqueue(task, task)
+	if err := q.Enqueue(task, task); err != nil {
+		t.Fatal(err)
+	}
 
-	pending := q.Pending()
+	pending, err := q.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(pending) != 1 {
 		t.Fatalf("have %d pending tasks want 1", len(pending))
 	}

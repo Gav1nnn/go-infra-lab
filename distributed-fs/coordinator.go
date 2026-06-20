@@ -35,7 +35,7 @@ type ReadPlan struct {
 type MetadataCoordinator struct {
 	metadata MetadataBackend
 	planner  *ReplicationPlanner
-	tasks    *ReplicationTaskQueue
+	tasks    ReplicationTaskQueue
 }
 
 // NewMetadataCoordinator creates the pure metadata control plane.
@@ -45,10 +45,15 @@ func NewMetadataCoordinator(replicaCount int) *MetadataCoordinator {
 
 // NewMetadataCoordinatorWithBackend creates a coordinator with a metadata backend.
 func NewMetadataCoordinatorWithBackend(replicaCount int, metadata MetadataBackend) *MetadataCoordinator {
+	return NewMetadataCoordinatorWithBackendAndQueue(replicaCount, metadata, NewMemoryReplicationTaskQueue())
+}
+
+// NewMetadataCoordinatorWithBackendAndQueue creates a coordinator with custom metadata and task backends.
+func NewMetadataCoordinatorWithBackendAndQueue(replicaCount int, metadata MetadataBackend, tasks ReplicationTaskQueue) *MetadataCoordinator {
 	return &MetadataCoordinator{
 		metadata: metadata,
 		planner:  NewReplicationPlanner(replicaCount),
-		tasks:    NewReplicationTaskQueue(),
+		tasks:    tasks,
 	}
 }
 
@@ -98,7 +103,9 @@ func (c *MetadataCoordinator) CommitWrite(prepared PreparedWrite) (WritePlan, er
 	if err != nil {
 		return WritePlan{}, err
 	}
-	c.tasks.Enqueue(tasks...)
+	if err := c.tasks.Enqueue(tasks...); err != nil {
+		return WritePlan{}, err
+	}
 
 	return WritePlan{
 		Metadata: meta,
@@ -180,7 +187,7 @@ func (c *MetadataCoordinator) DeleteFile(key string) (FileMetadata, error) {
 }
 
 // PendingTasks returns copy tasks that are waiting for a worker.
-func (c *MetadataCoordinator) PendingTasks() []ReplicationTask {
+func (c *MetadataCoordinator) PendingTasks() ([]ReplicationTask, error) {
 	return c.tasks.Pending()
 }
 
@@ -213,7 +220,9 @@ func (c *MetadataCoordinator) PlanRepair() ([]ReplicationTask, error) {
 		tasks = append(tasks, c.repairMissingReplicas(meta, source, nodes)...)
 	}
 
-	c.tasks.Enqueue(tasks...)
+	if err := c.tasks.Enqueue(tasks...); err != nil {
+		return nil, err
+	}
 	return tasks, nil
 }
 

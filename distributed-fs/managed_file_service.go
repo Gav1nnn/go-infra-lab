@@ -31,7 +31,12 @@ func NewManagedFileService(replicaCount int, objects ObjectStore) *ManagedFileSe
 
 // NewManagedFileServiceWithMetadata creates a service with a custom metadata backend.
 func NewManagedFileServiceWithMetadata(replicaCount int, objects ObjectStore, metadata MetadataBackend) *ManagedFileService {
-	coordinator := NewMetadataCoordinatorWithBackend(replicaCount, metadata)
+	return NewManagedFileServiceWithMetadataAndQueue(replicaCount, objects, metadata, NewMemoryReplicationTaskQueue())
+}
+
+// NewManagedFileServiceWithMetadataAndQueue creates a service with custom metadata and task backends.
+func NewManagedFileServiceWithMetadataAndQueue(replicaCount int, objects ObjectStore, metadata MetadataBackend, tasks ReplicationTaskQueue) *ManagedFileService {
+	coordinator := NewMetadataCoordinatorWithBackendAndQueue(replicaCount, metadata, tasks)
 	return &ManagedFileService{
 		coordinator: coordinator,
 		objects:     objects,
@@ -138,7 +143,11 @@ func (s *ManagedFileService) Metadata(key string) (FileMetadata, bool, error) {
 
 // PendingTasks returns pending async copy tasks.
 func (s *ManagedFileService) PendingTasks() []ReplicationTask {
-	return s.coordinator.PendingTasks()
+	tasks, err := s.coordinator.PendingTasks()
+	if err != nil {
+		return nil
+	}
+	return tasks
 }
 
 // PlanRepair enqueues repair tasks for missing or stale replicas.

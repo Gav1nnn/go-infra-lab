@@ -93,9 +93,13 @@ func runManager(ctx context.Context, args []string) error {
 		return err
 	}
 	defer metadata.Close()
+	tasks, err := NewDiskReplicationTaskQueue(metadata.db)
+	if err != nil {
+		return err
+	}
 
 	objects := NewHTTPObjectStore(nodes)
-	service := NewManagedFileServiceWithMetadata(*replicas, objects, metadata)
+	service := NewManagedFileServiceWithMetadataAndQueue(*replicas, objects, metadata, tasks)
 	for id, addr := range nodes {
 		if _, err := service.RegisterNode(id, addr); err != nil {
 			return err

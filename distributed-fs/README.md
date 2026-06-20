@@ -5,12 +5,12 @@
 ## Features
 
 - 中心化 metadata control plane，记录文件版本、副本状态、checksum、primary replica 和 tombstone。
-- Manager 使用 bbolt 持久化 metadata，重启后可以恢复文件版本、副本状态和 tombstone。
+- Manager 使用 bbolt 持久化 metadata 和 replication task，重启后可以恢复文件版本、副本状态、tombstone 和未完成复制任务。
 - 多副本最终一致：写入 primary 成功后发布 metadata，secondary replica 由后台 worker 异步复制。
 - 副本状态机：`pending` / `healthy` / `stale` / `missing` / `deleted`。
 - 节点状态机：`healthy` / `down`，storage node 通过 heartbeat 刷新状态。
 - 读取时优先 primary，primary 不可读时降级读取其他 healthy replica。
-- 复制 worker 支持 pending task、失败标记 missing、repair task 重新入队。
+- 复制 worker 支持 pending task、失败标记 missing、repair task 重新入队；未完成任务在 Manager 重启后恢复为可重试状态。
 - HTTP API + CLI + Docker Compose demo。
 - 保留原 P2P demo，作为早期传输层原型和后续演进基础。
 
@@ -44,6 +44,7 @@ Storage Nodes
 - secondary replicas 初始为 `pending`。
 - 后台 replication loop 将 pending/missing/stale 副本修复为 `healthy`。
 - `Get` 只读取 metadata 中标记为 `healthy` 的副本，并校验 checksum。
+- replication task 持久化在 Manager 的 bbolt 数据库中，`pending` 任务重启后继续执行，`running` / `failed` 任务重启后恢复为 `pending`。
 
 一句话总结：
 
@@ -152,21 +153,18 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 ./bin/fs p2p-demo
 ```
 
-## Interview Notes
+## Design Notes
 
-可以重点讲：
+- Metadata 是系统的权威控制面，读取、修复、删除都依赖 metadata 中的版本、副本状态和 tombstone。
+- `Put` 先写 primary object，primary 成功后再发布 metadata，避免 metadata 指向不存在的数据。
+- 异步复制流程为：pending task -> worker -> remote object copy -> replica healthy。
+- 读失败会将副本标记为 `missing` 或 `stale`，后续 repair loop 会重新规划复制任务。
+- manager 和 storage 都提供 `/healthz`；manager 提供 `/metrics`，返回文件数、删除文件数、pending task 数、节点状态和副本状态分布。
+- 后台 heartbeat、repair、replication loop 使用 `log.Printf` 输出运行错误。
 
-- 为什么不直接做强一致：项目目标是多副本容错和最终一致，复杂度更适合秋招项目落地。
-- 为什么 metadata 要准确：读取、修复、删除都依赖 metadata 作为权威控制面。
-- 为什么 `Put` 要先写 primary 再发布 metadata：避免 metadata 指向不存在的数据。
-- 异步复制如何工作：pending task -> worker -> remote object copy -> replica healthy。
-- 故障时如何处理：读失败标记 missing/stale，repair loop 后续重新复制。
-- 监控和报错机制：
-  - manager/storage 都提供 `/healthz`。
-  - manager 提供 `/metrics`，返回文件数、删除文件数、pending task 数、节点状态和副本状态分布。
-  - 后台 heartbeat、repair、replication loop 使用 `log.Printf` 输出错误。
-- 后续演进：
-  - metadata manager 用 Raft 做高可用。
-  - 整文件副本升级为 chunk-based storage。
-  - P2P transport 替换当前 HTTP object copy。
-  - repair worker 增加限速、重试退避和任务持久化。
+## Future Work
+
+- 使用 Raft 将 metadata manager 扩展为高可用集群。
+- 将整文件副本升级为 chunk-based storage。
+- 将 P2P transport 接入当前 HTTP object copy 主链路。
+- 为 repair worker 增加限速、重试退避和任务过期清理。

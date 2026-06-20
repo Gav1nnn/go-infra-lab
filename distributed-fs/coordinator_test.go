@@ -31,8 +31,12 @@ func TestMetadataCoordinatorBeginWrite(t *testing.T) {
 	if len(plan.Tasks) != 2 {
 		t.Fatalf("have %d tasks want 2", len(plan.Tasks))
 	}
-	if len(c.PendingTasks()) != 2 {
-		t.Fatalf("have %d pending tasks want 2", len(c.PendingTasks()))
+	pending, err := c.PendingTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("have %d pending tasks want 2", len(pending))
 	}
 }
 
@@ -171,7 +175,7 @@ func newTestCoordinator() *MetadataCoordinator {
 	store := NewMetadataStore()
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
-	c := NewMetadataCoordinatorWithBackend(3, NewMemoryMetadataBackend(store))
-	c.tasks.now = func() time.Time { return now }
-	return c
+	tasks := NewMemoryReplicationTaskQueue()
+	tasks.now = func() time.Time { return now }
+	return NewMetadataCoordinatorWithBackendAndQueue(3, NewMemoryMetadataBackend(store), tasks)
 }

@@ -51,7 +51,11 @@ func TestReplicationWorkerSuccess(t *testing.T) {
 	if meta.Replicas[plan.Tasks[0].Target].State != ReplicaHealthy {
 		t.Fatalf("target replica should be healthy")
 	}
-	if len(c.PendingTasks()) != 0 {
+	pending, err := c.PendingTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
 		t.Fatalf("pending tasks should be empty")
 	}
 }
@@ -87,7 +91,11 @@ func TestReplicationWorkerFailure(t *testing.T) {
 	if meta.Replicas[plan.Tasks[0].Target].State != ReplicaMissing {
 		t.Fatalf("target replica should be missing")
 	}
-	if len(c.PendingTasks()) != 0 {
+	pending, err := c.PendingTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
 		t.Fatalf("pending tasks should be empty")
 	}
 }

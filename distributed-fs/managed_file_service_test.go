@@ -164,8 +164,12 @@ func TestManagedFileServiceWithDiskMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tasks, err := NewDiskReplicationTaskQueue(metadata.db)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	svc := NewManagedFileServiceWithMetadata(2, objects, metadata)
+	svc := NewManagedFileServiceWithMetadataAndQueue(2, objects, metadata, tasks)
 	svc.RegisterNode("node1", ":3000")
 	svc.RegisterNode("node2", ":5000")
 	if _, err := svc.Put("foo.txt", bytes.NewReader([]byte("persistent metadata"))); err != nil {
@@ -180,8 +184,12 @@ func TestManagedFileServiceWithDiskMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+	reopenedTasks, err := NewDiskReplicationTaskQueue(reopened.db)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	recovered := NewManagedFileServiceWithMetadata(2, objects, reopened)
+	recovered := NewManagedFileServiceWithMetadataAndQueue(2, objects, reopened, reopenedTasks)
 	meta, ok, err := recovered.Metadata("foo.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +207,18 @@ func TestManagedFileServiceWithDiskMetadata(t *testing.T) {
 	}
 	if len(nodes) != 2 {
 		t.Fatalf("have %d nodes want 2", len(nodes))
+	}
+
+	pending := recovered.PendingTasks()
+	if len(pending) != 1 {
+		t.Fatalf("have %d pending tasks want 1", len(pending))
+	}
+	task, err := recovered.RunReplicationOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != ReplicationTaskDone {
+		t.Fatalf("have task state %s want done", task.State)
 	}
 }
 

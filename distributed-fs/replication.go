@@ -9,6 +9,15 @@ import (
 
 const defaultReplicaCount = 3
 
+// ReplicationTaskQueue stores async copy tasks.
+type ReplicationTaskQueue interface {
+	Enqueue(...ReplicationTask) error
+	Pending() ([]ReplicationTask, error)
+	MarkRunning(string) (ReplicationTask, error)
+	MarkDone(string) (ReplicationTask, error)
+	MarkFailed(string) (ReplicationTask, error)
+}
+
 // ReplicationTaskState represents the lifecycle of an async copy task.
 type ReplicationTaskState string
 
@@ -130,32 +139,33 @@ func TasksForFile(meta FileMetadata, now time.Time) ([]ReplicationTask, error) {
 	return tasks, nil
 }
 
-// ReplicationTaskQueue stores async copy tasks in memory.
-type ReplicationTaskQueue struct {
+// MemoryReplicationTaskQueue stores async copy tasks in memory.
+type MemoryReplicationTaskQueue struct {
 	tasks map[string]ReplicationTask
 	now   func() time.Time
 }
 
-// NewReplicationTaskQueue creates an empty task queue.
-func NewReplicationTaskQueue() *ReplicationTaskQueue {
-	return &ReplicationTaskQueue{
+// NewMemoryReplicationTaskQueue creates an empty in-memory task queue.
+func NewMemoryReplicationTaskQueue() *MemoryReplicationTaskQueue {
+	return &MemoryReplicationTaskQueue{
 		tasks: make(map[string]ReplicationTask),
 		now:   time.Now,
 	}
 }
 
 // Enqueue inserts tasks if they do not already exist.
-func (q *ReplicationTaskQueue) Enqueue(tasks ...ReplicationTask) {
+func (q *MemoryReplicationTaskQueue) Enqueue(tasks ...ReplicationTask) error {
 	for _, task := range tasks {
 		if _, ok := q.tasks[task.ID]; ok {
 			continue
 		}
 		q.tasks[task.ID] = task
 	}
+	return nil
 }
 
 // Pending returns tasks that are waiting to run.
-func (q *ReplicationTaskQueue) Pending() []ReplicationTask {
+func (q *MemoryReplicationTaskQueue) Pending() ([]ReplicationTask, error) {
 	tasks := make([]ReplicationTask, 0, len(q.tasks))
 	for _, task := range q.tasks {
 		if task.State == ReplicationTaskPending {
@@ -165,11 +175,11 @@ func (q *ReplicationTaskQueue) Pending() []ReplicationTask {
 	sort.Slice(tasks, func(i, j int) bool {
 		return tasks[i].ID < tasks[j].ID
 	})
-	return tasks
+	return tasks, nil
 }
 
 // MarkRunning marks a task as currently being copied.
-func (q *ReplicationTaskQueue) MarkRunning(id string) (ReplicationTask, error) {
+func (q *MemoryReplicationTaskQueue) MarkRunning(id string) (ReplicationTask, error) {
 	task, ok := q.tasks[id]
 	if !ok {
 		return ReplicationTask{}, ErrTaskNotFound
@@ -182,7 +192,7 @@ func (q *ReplicationTaskQueue) MarkRunning(id string) (ReplicationTask, error) {
 }
 
 // MarkDone marks a task as successfully copied.
-func (q *ReplicationTaskQueue) MarkDone(id string) (ReplicationTask, error) {
+func (q *MemoryReplicationTaskQueue) MarkDone(id string) (ReplicationTask, error) {
 	task, ok := q.tasks[id]
 	if !ok {
 		return ReplicationTask{}, ErrTaskNotFound
@@ -194,7 +204,7 @@ func (q *ReplicationTaskQueue) MarkDone(id string) (ReplicationTask, error) {
 }
 
 // MarkFailed marks a task as failed and eligible for retry later.
-func (q *ReplicationTaskQueue) MarkFailed(id string) (ReplicationTask, error) {
+func (q *MemoryReplicationTaskQueue) MarkFailed(id string) (ReplicationTask, error) {
 	task, ok := q.tasks[id]
 	if !ok {
 		return ReplicationTask{}, ErrTaskNotFound
