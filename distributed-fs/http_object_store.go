@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,12 +35,8 @@ func (s *HTTPObjectStore) SetNode(nodeID, addr string) {
 
 // WriteObject writes one object version to a remote storage node.
 func (s *HTTPObjectStore) WriteObject(nodeID, key string, version uint64, r io.Reader) (int64, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return 0, err
-	}
-
-	req, err := http.NewRequest(http.MethodPut, s.objectURL(nodeID, key, version), bytes.NewReader(data))
+	counter := &countingReader{r: r}
+	req, err := http.NewRequest(http.MethodPut, s.objectURL(nodeID, key, version), counter)
 	if err != nil {
 		return 0, err
 	}
@@ -54,7 +49,7 @@ func (s *HTTPObjectStore) WriteObject(nodeID, key string, version uint64, r io.R
 	if resp.StatusCode/100 != 2 {
 		return 0, fmt.Errorf("storage write failed: %s", resp.Status)
 	}
-	return int64(len(data)), nil
+	return counter.n, nil
 }
 
 // ReadObject reads one object version from a remote storage node.
@@ -107,4 +102,15 @@ func (s *HTTPObjectStore) objectURL(nodeID, key string, version uint64) string {
 	base := strings.TrimRight(s.nodes[nodeID], "/")
 	s.mu.RUnlock()
 	return fmt.Sprintf("%s/objects/%s?version=%d", base, url.PathEscape(key), version)
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }

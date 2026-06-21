@@ -11,6 +11,7 @@
 - 节点状态机：`healthy` / `down`，storage node 通过 heartbeat 刷新状态。
 - 读取时优先 primary，primary 不可读时降级读取其他 healthy replica。
 - 复制 worker 支持 pending task、失败标记 missing、repair task 重新入队；未完成任务在 Manager 重启后恢复为可重试状态。
+- 上传、下载和 object copy 主链路基于 `io.Reader` / `io.Writer` 流式传输；Manager 通过临时文件 staging 计算 size/checksum，避免大文件常驻内存。
 - HTTP API + CLI + Docker Compose demo。
 - 保留原 P2P demo，作为早期传输层原型和后续演进基础。
 

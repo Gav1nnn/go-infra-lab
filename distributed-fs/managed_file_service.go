@@ -1,8 +1,10 @@
 package main
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
+	"os"
 	"sync"
 	"time"
 )
@@ -54,17 +56,21 @@ func (s *ManagedFileService) Put(key string, r io.Reader) (FileMetadata, error) 
 	s.writeLock.Lock()
 	defer s.writeLock.Unlock()
 
-	data, err := io.ReadAll(r)
+	staged, size, checksum, err := stageReader(r)
+	if err != nil {
+		return FileMetadata{}, err
+	}
+	defer staged.Close()
+
+	prepared, err := s.coordinator.PrepareWrite(key, size, checksum)
 	if err != nil {
 		return FileMetadata{}, err
 	}
 
-	prepared, err := s.coordinator.PrepareWrite(key, int64(len(data)), checksumBytes(data))
-	if err != nil {
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
 		return FileMetadata{}, err
 	}
-
-	if _, err := s.objects.WriteObject(prepared.Primary.ID, key, prepared.Version, bytes.NewReader(data)); err != nil {
+	if _, err := s.objects.WriteObject(prepared.Primary.ID, key, prepared.Version, staged); err != nil {
 		return FileMetadata{}, err
 	}
 
@@ -91,17 +97,25 @@ func (s *ManagedFileService) Get(key string) (io.ReadCloser, FileMetadata, error
 			continue
 		}
 
-		data, err := io.ReadAll(r)
-		r.Close()
-		if err != nil {
+		staged, size, checksum, err := stageReader(r)
+		closeErr := r.Close()
+		if err != nil || closeErr != nil {
+			if staged != nil {
+				staged.Close()
+			}
 			s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaStale)
 			continue
 		}
-		if checksumBytes(data) != plan.Metadata.Checksum {
+		if size != plan.Metadata.Size || checksum != plan.Metadata.Checksum {
+			staged.Close()
 			s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaStale)
 			continue
 		}
-		return io.NopCloser(bytes.NewReader(data)), plan.Metadata, nil
+		if _, err := staged.Seek(0, io.SeekStart); err != nil {
+			staged.Close()
+			return nil, FileMetadata{}, err
+		}
+		return staged, plan.Metadata, nil
 	}
 
 	return nil, FileMetadata{}, ErrNoReadableReplicas
@@ -194,4 +208,34 @@ func (s *ManagedFileService) Metrics() (ServiceMetrics, error) {
 		}
 	}
 	return metrics, nil
+}
+
+func stageReader(r io.Reader) (*tempFileReadCloser, int64, string, error) {
+	f, err := os.CreateTemp("", "dfs-object-*")
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, h), r)
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, 0, "", err
+	}
+
+	return &tempFileReadCloser{File: f}, n, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+type tempFileReadCloser struct {
+	*os.File
+}
+
+func (f *tempFileReadCloser) Close() error {
+	name := f.Name()
+	err := f.File.Close()
+	if removeErr := os.Remove(name); err == nil {
+		err = removeErr
+	}
+	return err
 }

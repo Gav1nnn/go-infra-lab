@@ -169,11 +169,17 @@ func runPut(args []string) error {
 	if fs.NArg() != 2 {
 		return fmt.Errorf("usage: fs put [flags] <key> <path>")
 	}
-	data, err := os.ReadFile(fs.Arg(1))
+	file, err := os.Open(fs.Arg(1))
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(mustRequest(http.MethodPut, fileURL(*manager, fs.Arg(0)), bytes.NewReader(data)))
+	defer file.Close()
+
+	req := mustRequest(http.MethodPut, fileURL(*manager, fs.Arg(0)), file)
+	if fi, err := file.Stat(); err == nil {
+		req.ContentLength = fi.Size()
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -205,14 +211,19 @@ func runGet(args []string) error {
 	if resp.StatusCode/100 != 2 {
 		return responseError(resp)
 	}
-	data, err := io.ReadAll(resp.Body)
+	out, err := os.Create(fs.Arg(1))
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(fs.Arg(1), data, 0644); err != nil {
-		return err
+	n, copyErr := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
 	}
-	fmt.Printf("fetched key=%s bytes=%d\n", fs.Arg(0), len(data))
+	if closeErr != nil {
+		return closeErr
+	}
+	fmt.Printf("fetched key=%s bytes=%d\n", fs.Arg(0), n)
 	return nil
 }
 
