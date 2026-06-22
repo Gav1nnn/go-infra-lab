@@ -144,8 +144,8 @@ func (c *MetadataCoordinator) StartReplication(taskID string) (ReplicationTask, 
 }
 
 // FailReplication marks a copy task failed and records the target replica missing.
-func (c *MetadataCoordinator) FailReplication(taskID string) (FileMetadata, ReplicationTask, error) {
-	task, err := c.tasks.MarkFailed(taskID)
+func (c *MetadataCoordinator) FailReplication(taskID string, cause error) (FileMetadata, ReplicationTask, error) {
+	task, err := c.tasks.MarkFailed(taskID, cause)
 	if err != nil {
 		return FileMetadata{}, ReplicationTask{}, err
 	}
@@ -189,6 +189,16 @@ func (c *MetadataCoordinator) DeleteFile(key string) (FileMetadata, error) {
 // PendingTasks returns copy tasks that are waiting for a worker.
 func (c *MetadataCoordinator) PendingTasks() ([]ReplicationTask, error) {
 	return c.tasks.Pending()
+}
+
+// RequeueExpiredReplicationTasks recovers running tasks whose lease has expired.
+func (c *MetadataCoordinator) RequeueExpiredReplicationTasks() ([]ReplicationTask, error) {
+	return c.tasks.RequeueExpiredRunning()
+}
+
+// ReplicationTaskStats returns task counts by state.
+func (c *MetadataCoordinator) ReplicationTaskStats() (map[ReplicationTaskState]int, error) {
+	return c.tasks.Stats()
 }
 
 // PlanRepair scans metadata and enqueues tasks for missing or stale replicas.

@@ -141,6 +141,9 @@ func TestReplicationTaskQueue(t *testing.T) {
 	if running.Attempts != 1 {
 		t.Fatalf("have attempts %d want 1", running.Attempts)
 	}
+	if running.LeaseUntil.IsZero() {
+		t.Fatalf("lease_until should be set")
+	}
 
 	done, err := q.MarkDone("task1")
 	if err != nil {
@@ -152,5 +155,120 @@ func TestReplicationTaskQueue(t *testing.T) {
 
 	if _, err := q.MarkDone("missing"); err != ErrTaskNotFound {
 		t.Fatalf("have err %v want ErrTaskNotFound", err)
+	}
+}
+
+func TestReplicationTaskQueueFailureBackoffAndDead(t *testing.T) {
+	q := NewMemoryReplicationTaskQueue()
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	task := ReplicationTask{
+		ID:        "task1",
+		Key:       "foo.txt",
+		Version:   1,
+		Source:    "node1",
+		Target:    "node2",
+		State:     ReplicationTaskPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := q.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := q.MarkRunning("task1"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := q.MarkFailed("task1", errTestCopyFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != ReplicationTaskPending {
+		t.Fatalf("have state %s want pending", failed.State)
+	}
+	if failed.LastError != errTestCopyFailed.Error() {
+		t.Fatalf("have last error %q want %q", failed.LastError, errTestCopyFailed.Error())
+	}
+	if !failed.RunAfter.After(now) {
+		t.Fatalf("run_after should be in the future")
+	}
+
+	pending, err := q.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("have %d pending tasks want 0 before backoff expires", len(pending))
+	}
+
+	now = failed.RunAfter
+	pending, err = q.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("have %d pending tasks want 1 after backoff expires", len(pending))
+	}
+
+	for i := failed.Attempts; i < defaultReplicationTaskMaxAttempts; i++ {
+		if _, err := q.MarkRunning("task1"); err != nil {
+			t.Fatal(err)
+		}
+		failed, err = q.MarkFailed("task1", errTestCopyFailed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now = failed.RunAfter
+	}
+	if failed.State != ReplicationTaskDead {
+		t.Fatalf("have state %s want dead", failed.State)
+	}
+
+	stats, err := q.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[ReplicationTaskDead] != 1 {
+		t.Fatalf("have %d dead tasks want 1", stats[ReplicationTaskDead])
+	}
+}
+
+func TestReplicationTaskQueueRequeuesExpiredRunning(t *testing.T) {
+	q := NewMemoryReplicationTaskQueue()
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+
+	task := ReplicationTask{
+		ID:        "task1",
+		Key:       "foo.txt",
+		Version:   1,
+		Source:    "node1",
+		Target:    "node2",
+		State:     ReplicationTaskPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := q.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	running, err := q.MarkRunning("task1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now = running.LeaseUntil.Add(time.Second)
+	requeued, err := q.RequeueExpiredRunning()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requeued) != 1 {
+		t.Fatalf("have %d requeued tasks want 1", len(requeued))
+	}
+	if requeued[0].State != ReplicationTaskPending {
+		t.Fatalf("have state %s want pending", requeued[0].State)
+	}
+	if requeued[0].LastError == "" {
+		t.Fatalf("last error should explain lease expiry")
 	}
 }

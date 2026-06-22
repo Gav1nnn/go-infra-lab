@@ -34,7 +34,7 @@ func TestDiskReplicationTaskQueuePersistenceAndRestore(t *testing.T) {
 	if _, err := q.MarkRunning("running"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.MarkFailed("failed"); err != nil {
+	if _, err := q.MarkFailed("failed", errTestCopyFailed); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.MarkDone("done"); err != nil {
@@ -61,7 +61,7 @@ func TestDiskReplicationTaskQueuePersistenceAndRestore(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("have %d pending tasks want 3", len(pending))
 	}
-	if pending[0].ID != "failed" || pending[1].ID != "pending" || pending[2].ID != "running" {
+	if pending[0].ID != "pending" || pending[1].ID != "running" || pending[2].ID != "failed" {
 		t.Fatalf("unexpected pending tasks: %+v", pending)
 	}
 }

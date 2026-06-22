@@ -284,6 +284,9 @@ func managerLoop(ctx context.Context, service *ManagedFileService) {
 			if err := service.MarkExpiredNodes(10 * time.Second); err != nil {
 				log.Printf("mark expired nodes failed: %v", err)
 			}
+			if _, err := service.RequeueExpiredReplicationTasks(); err != nil {
+				log.Printf("requeue expired replication tasks failed: %v", err)
+			}
 			if _, err := service.PlanRepair(); err != nil {
 				log.Printf("plan repair failed: %v", err)
 			}

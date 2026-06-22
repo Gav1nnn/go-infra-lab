@@ -11,11 +11,12 @@ import (
 
 // ServiceMetrics summarizes manager state for observability.
 type ServiceMetrics struct {
-	Files        int                  `json:"files"`
-	DeletedFiles int                  `json:"deletedFiles"`
-	PendingTasks int                  `json:"pendingTasks"`
-	Nodes        map[NodeState]int    `json:"nodes"`
-	Replicas     map[ReplicaState]int `json:"replicas"`
+	Files            int                          `json:"files"`
+	DeletedFiles     int                          `json:"deletedFiles"`
+	PendingTasks     int                          `json:"pendingTasks"`
+	ReplicationTasks map[ReplicationTaskState]int `json:"replicationTasks"`
+	Nodes            map[NodeState]int            `json:"nodes"`
+	Replicas         map[ReplicaState]int         `json:"replicas"`
 }
 
 // ManagedFileService is a single-process file service built on metadata and object storage.
@@ -169,6 +170,11 @@ func (s *ManagedFileService) PlanRepair() ([]ReplicationTask, error) {
 	return s.coordinator.PlanRepair()
 }
 
+// RequeueExpiredReplicationTasks recovers replication tasks stuck in running.
+func (s *ManagedFileService) RequeueExpiredReplicationTasks() ([]ReplicationTask, error) {
+	return s.coordinator.RequeueExpiredReplicationTasks()
+}
+
 // MarkExpiredNodes marks nodes as down when heartbeats expire.
 func (s *ManagedFileService) MarkExpiredNodes(ttl time.Duration) error {
 	return s.coordinator.metadata.MarkExpiredNodes(ttl)
@@ -189,11 +195,16 @@ func (s *ManagedFileService) Metrics() (ServiceMetrics, error) {
 	if err != nil {
 		return ServiceMetrics{}, err
 	}
+	taskStats, err := s.coordinator.ReplicationTaskStats()
+	if err != nil {
+		return ServiceMetrics{}, err
+	}
 
 	metrics := ServiceMetrics{
-		PendingTasks: len(s.PendingTasks()),
-		Nodes:        make(map[NodeState]int),
-		Replicas:     make(map[ReplicaState]int),
+		PendingTasks:     len(s.PendingTasks()),
+		ReplicationTasks: taskStats,
+		Nodes:            make(map[NodeState]int),
+		Replicas:         make(map[ReplicaState]int),
 	}
 	for _, node := range nodes {
 		metrics.Nodes[node.State]++

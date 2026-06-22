@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+var errTestCopyFailed = errors.New("copy failed")
 
 func TestMetadataCoordinatorBeginWrite(t *testing.T) {
 	c := newTestCoordinator()
@@ -80,12 +83,15 @@ func TestMetadataCoordinatorFailReplication(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, task, err := c.FailReplication(plan.Tasks[0].ID)
+	meta, task, err := c.FailReplication(plan.Tasks[0].ID, errTestCopyFailed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.State != ReplicationTaskFailed {
-		t.Fatalf("have task state %s want failed", task.State)
+	if task.State != ReplicationTaskPending {
+		t.Fatalf("have task state %s want pending", task.State)
+	}
+	if task.LastError != errTestCopyFailed.Error() {
+		t.Fatalf("have last error %q want %q", task.LastError, errTestCopyFailed.Error())
 	}
 	if meta.Replicas[task.Target].State != ReplicaMissing {
 		t.Fatalf("target replica should be missing")
@@ -155,7 +161,7 @@ func TestMetadataCoordinatorPlanRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.FailReplication(plan.Tasks[0].ID); err != nil {
+	if _, _, err := c.FailReplication(plan.Tasks[0].ID, errTestCopyFailed); err != nil {
 		t.Fatal(err)
 	}
 

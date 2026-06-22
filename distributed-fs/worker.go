@@ -39,7 +39,7 @@ func (w *ReplicationWorker) WorkOnce() (ReplicationTask, error) {
 	}
 
 	if err := w.replicator.Replicate(task); err != nil {
-		_, failedTask, failErr := w.coordinator.FailReplication(task.ID)
+		_, failedTask, failErr := w.coordinator.FailReplication(task.ID, err)
 		if failErr != nil {
 			return ReplicationTask{}, failErr
 		}

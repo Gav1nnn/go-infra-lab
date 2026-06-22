@@ -77,8 +77,14 @@ func TestReplicationWorkerFailure(t *testing.T) {
 	if err != copyErr {
 		t.Fatalf("have err %v want copyErr", err)
 	}
-	if task.State != ReplicationTaskFailed {
-		t.Fatalf("have task state %s want failed", task.State)
+	if task.State != ReplicationTaskPending {
+		t.Fatalf("have task state %s want pending", task.State)
+	}
+	if task.LastError != copyErr.Error() {
+		t.Fatalf("have last error %q want %q", task.LastError, copyErr.Error())
+	}
+	if task.RunAfter.IsZero() {
+		t.Fatalf("run_after should be set after failure")
 	}
 
 	meta, ok, err := c.metadata.GetFile("foo.txt")
