@@ -8,7 +8,7 @@ type MetadataBackend interface {
 	MarkExpiredNodes(ttl time.Duration) error
 	HealthyNodes() ([]NodeMetadata, error)
 	Nodes() ([]NodeMetadata, error)
-	BeginFileVersion(key string, size int64, checksum, primary string, replicas []string) (FileMetadata, error)
+	BeginFileVersion(key string, size int64, checksum string, chunks []ChunkMetadata, primary string, replicas []string) (FileMetadata, error)
 	NextVersion(key string) (uint64, error)
 	MarkReplica(key, nodeID string, state ReplicaState) (FileMetadata, error)
 	Tombstone(key string) (FileMetadata, error)
@@ -50,8 +50,8 @@ func (m *MemoryMetadataBackend) Nodes() ([]NodeMetadata, error) {
 }
 
 // BeginFileVersion records a new primary replica and pending secondary replicas.
-func (m *MemoryMetadataBackend) BeginFileVersion(key string, size int64, checksum, primary string, replicas []string) (FileMetadata, error) {
-	return m.store.BeginFileVersion(key, size, checksum, primary, replicas), nil
+func (m *MemoryMetadataBackend) BeginFileVersion(key string, size int64, checksum string, chunks []ChunkMetadata, primary string, replicas []string) (FileMetadata, error) {
+	return m.store.BeginFileVersion(key, size, checksum, chunks, primary, replicas), nil
 }
 
 // NextVersion returns the next version number for a file key.

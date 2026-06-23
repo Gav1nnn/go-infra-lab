@@ -3,11 +3,14 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"sync"
 	"time"
 )
+
+const defaultChunkSize int64 = 4 * 1024 * 1024
 
 // ServiceMetrics summarizes manager state for observability.
 type ServiceMetrics struct {
@@ -57,27 +60,24 @@ func (s *ManagedFileService) Put(key string, r io.Reader) (FileMetadata, error) 
 	s.writeLock.Lock()
 	defer s.writeLock.Unlock()
 
-	staged, size, checksum, err := stageReader(r)
+	staged, size, checksum, chunks, err := stageReader(r)
 	if err != nil {
 		return FileMetadata{}, err
 	}
 	defer staged.Close()
 
-	prepared, err := s.coordinator.PrepareWrite(key, size, checksum)
+	prepared, err := s.coordinator.PrepareWrite(key, size, checksum, chunks)
 	if err != nil {
 		return FileMetadata{}, err
 	}
 
-	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		return FileMetadata{}, err
-	}
-	if _, err := s.objects.WriteObject(prepared.Primary.ID, key, prepared.Version, staged); err != nil {
+	if err := s.writeChunks(prepared.Primary.ID, key, prepared.Version, staged, chunks); err != nil {
 		return FileMetadata{}, err
 	}
 
 	plan, err := s.coordinator.CommitWrite(prepared)
 	if err != nil {
-		s.objects.DeleteObject(prepared.Primary.ID, key, prepared.Version)
+		s.deleteObjects(prepared.Primary.ID, key, prepared.Version, chunks)
 		return FileMetadata{}, err
 	}
 
@@ -92,24 +92,13 @@ func (s *ManagedFileService) Get(key string) (io.ReadCloser, FileMetadata, error
 	}
 
 	for _, replica := range plan.Replicas {
-		_, r, err := s.objects.ReadObject(replica.NodeID, key, plan.Metadata.Version)
+		staged, err := s.stageReplica(replica.NodeID, plan.Metadata)
 		if err != nil {
-			s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaMissing)
-			continue
-		}
-
-		staged, size, checksum, err := stageReader(r)
-		closeErr := r.Close()
-		if err != nil || closeErr != nil {
-			if staged != nil {
-				staged.Close()
+			if errors.Is(err, ErrChecksumMismatch) {
+				s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaStale)
+			} else {
+				s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaMissing)
 			}
-			s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaStale)
-			continue
-		}
-		if size != plan.Metadata.Size || checksum != plan.Metadata.Checksum {
-			staged.Close()
-			s.coordinator.metadata.MarkReplica(key, replica.NodeID, ReplicaStale)
 			continue
 		}
 		if _, err := staged.Seek(0, io.SeekStart); err != nil {
@@ -141,7 +130,7 @@ func (s *ManagedFileService) Delete(key string) (FileMetadata, error) {
 	}
 
 	for nodeID := range meta.Replicas {
-		s.objects.DeleteObject(nodeID, key, meta.Version)
+		s.deleteObjects(nodeID, key, meta.Version, meta.Chunks)
 	}
 	return deleted, nil
 }
@@ -221,21 +210,186 @@ func (s *ManagedFileService) Metrics() (ServiceMetrics, error) {
 	return metrics, nil
 }
 
-func stageReader(r io.Reader) (*tempFileReadCloser, int64, string, error) {
+func (s *ManagedFileService) writeChunks(nodeID, key string, version uint64, staged *tempFileReadCloser, chunks []ChunkMetadata) error {
+	if len(chunks) == 0 {
+		if _, err := staged.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		_, err := s.objects.WriteObject(nodeID, key, version, staged)
+		return err
+	}
+
+	for _, chunk := range chunks {
+		if _, err := staged.Seek(chunk.Offset, io.SeekStart); err != nil {
+			s.deleteObjects(nodeID, key, version, chunks)
+			return err
+		}
+		objectKey := chunkObjectKey(key, chunk.Index)
+		n, err := s.objects.WriteObject(nodeID, objectKey, version, io.LimitReader(staged, chunk.Size))
+		if err != nil {
+			s.deleteObjects(nodeID, key, version, chunks)
+			return err
+		}
+		if n != chunk.Size {
+			s.deleteObjects(nodeID, key, version, chunks)
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func (s *ManagedFileService) stageReplica(nodeID string, meta FileMetadata) (*tempFileReadCloser, error) {
+	if len(meta.Chunks) == 0 {
+		_, r, err := s.objects.ReadObject(nodeID, meta.Key, meta.Version)
+		if err != nil {
+			return nil, err
+		}
+		staged, size, checksum, _, err := stageReader(r)
+		closeErr := r.Close()
+		if err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			staged.Close()
+			return nil, closeErr
+		}
+		if size != meta.Size || checksum != meta.Checksum {
+			staged.Close()
+			return nil, ErrChecksumMismatch
+		}
+		return staged, nil
+	}
+
 	f, err := os.CreateTemp("", "dfs-object-*")
 	if err != nil {
-		return nil, 0, "", err
+		return nil, err
+	}
+	staged := &tempFileReadCloser{File: f}
+	fullHash := sha256.New()
+	var total int64
+
+	for _, chunk := range meta.Chunks {
+		_, r, err := s.objects.ReadObject(nodeID, chunkObjectKey(meta.Key, chunk.Index), meta.Version)
+		if err != nil {
+			staged.Close()
+			return nil, err
+		}
+
+		chunkHash := sha256.New()
+		n, copyErr := io.Copy(io.MultiWriter(staged, fullHash, chunkHash), r)
+		closeErr := r.Close()
+		if copyErr != nil {
+			staged.Close()
+			return nil, copyErr
+		}
+		if closeErr != nil {
+			staged.Close()
+			return nil, closeErr
+		}
+		if n != chunk.Size || hex.EncodeToString(chunkHash.Sum(nil)) != chunk.Checksum {
+			staged.Close()
+			return nil, ErrChecksumMismatch
+		}
+		total += n
+	}
+
+	if total != meta.Size || hex.EncodeToString(fullHash.Sum(nil)) != meta.Checksum {
+		staged.Close()
+		return nil, ErrChecksumMismatch
+	}
+	return staged, nil
+}
+
+func (s *ManagedFileService) deleteObjects(nodeID, key string, version uint64, chunks []ChunkMetadata) {
+	if len(chunks) == 0 {
+		s.objects.DeleteObject(nodeID, key, version)
+		return
+	}
+	for _, chunk := range chunks {
+		s.objects.DeleteObject(nodeID, chunkObjectKey(key, chunk.Index), version)
+	}
+}
+
+func stageReader(r io.Reader) (*tempFileReadCloser, int64, string, []ChunkMetadata, error) {
+	f, err := os.CreateTemp("", "dfs-object-*")
+	if err != nil {
+		return nil, 0, "", nil, err
 	}
 
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), r)
-	if err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return nil, 0, "", err
+	chunkHash := sha256.New()
+	chunks := []ChunkMetadata{}
+	buf := make([]byte, 32*1024)
+	var total int64
+	var chunkSize int64
+	chunkIndex := 0
+	chunkOffset := int64(0)
+
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			data := buf[:n]
+			if _, err := f.Write(data); err != nil {
+				f.Close()
+				os.Remove(f.Name())
+				return nil, 0, "", nil, err
+			}
+			if _, err := h.Write(data); err != nil {
+				f.Close()
+				os.Remove(f.Name())
+				return nil, 0, "", nil, err
+			}
+
+			remaining := data
+			for len(remaining) > 0 {
+				space := int(defaultChunkSize - chunkSize)
+				if space > len(remaining) {
+					space = len(remaining)
+				}
+				part := remaining[:space]
+				if _, err := chunkHash.Write(part); err != nil {
+					f.Close()
+					os.Remove(f.Name())
+					return nil, 0, "", nil, err
+				}
+				chunkSize += int64(len(part))
+				total += int64(len(part))
+				remaining = remaining[space:]
+
+				if chunkSize == defaultChunkSize {
+					chunks = append(chunks, ChunkMetadata{
+						Index:    chunkIndex,
+						Offset:   chunkOffset,
+						Size:     chunkSize,
+						Checksum: hex.EncodeToString(chunkHash.Sum(nil)),
+					})
+					chunkIndex++
+					chunkOffset = total
+					chunkSize = 0
+					chunkHash = sha256.New()
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			f.Close()
+			os.Remove(f.Name())
+			return nil, 0, "", nil, readErr
+		}
 	}
 
-	return &tempFileReadCloser{File: f}, n, hex.EncodeToString(h.Sum(nil)), nil
+	if chunkSize > 0 || total == 0 {
+		chunks = append(chunks, ChunkMetadata{
+			Index:    chunkIndex,
+			Offset:   chunkOffset,
+			Size:     chunkSize,
+			Checksum: hex.EncodeToString(chunkHash.Sum(nil)),
+		})
+	}
+
+	return &tempFileReadCloser{File: f}, total, hex.EncodeToString(h.Sum(nil)), chunks, nil
 }
 
 type tempFileReadCloser struct {

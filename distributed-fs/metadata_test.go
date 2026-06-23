@@ -36,6 +36,7 @@ func TestMetadataStoreBeginFileVersion(t *testing.T) {
 		"picture.png",
 		128,
 		"checksum",
+		[]ChunkMetadata{{Index: 0, Offset: 0, Size: 128, Checksum: "chunk-checksum"}},
 		"node1",
 		[]string{"node1", "node2", "node3"},
 	)
@@ -52,11 +53,15 @@ func TestMetadataStoreBeginFileVersion(t *testing.T) {
 	if meta.Replicas["node2"].State != ReplicaPending {
 		t.Fatalf("secondary replica should be pending")
 	}
+	if len(meta.Chunks) != 1 || meta.Chunks[0].Checksum != "chunk-checksum" {
+		t.Fatalf("chunk metadata should be recorded")
+	}
 
 	next := m.BeginFileVersion(
 		"picture.png",
 		256,
 		"checksum2",
+		nil,
 		"node2",
 		[]string{"node2", "node3"},
 	)
@@ -70,7 +75,7 @@ func TestMetadataStoreBeginFileVersion(t *testing.T) {
 
 func TestMetadataStoreReplicaState(t *testing.T) {
 	m := NewMetadataStore()
-	m.BeginFileVersion("foo.txt", 10, "checksum", "node1", []string{"node1", "node2"})
+	m.BeginFileVersion("foo.txt", 10, "checksum", nil, "node1", []string{"node1", "node2"})
 
 	meta, err := m.MarkReplica("foo.txt", "node2", ReplicaHealthy)
 	if err != nil {
@@ -89,7 +94,7 @@ func TestMetadataStoreReplicaState(t *testing.T) {
 
 func TestMetadataStoreTombstone(t *testing.T) {
 	m := NewMetadataStore()
-	m.BeginFileVersion("foo.txt", 10, "checksum", "node1", []string{"node1", "node2"})
+	m.BeginFileVersion("foo.txt", 10, "checksum", nil, "node1", []string{"node1", "node2"})
 
 	meta, err := m.Tombstone("foo.txt")
 	if err != nil {

@@ -46,6 +46,14 @@ type ReplicaMetadata struct {
 	UpdatedAt time.Time
 }
 
+// ChunkMetadata tracks one chunk in a file version.
+type ChunkMetadata struct {
+	Index    int    `json:"index"`
+	Offset   int64  `json:"offset"`
+	Size     int64  `json:"size"`
+	Checksum string `json:"checksum"`
+}
+
 // FileMetadata is the authoritative metadata record for one user key.
 type FileMetadata struct {
 	Key       string
@@ -54,6 +62,7 @@ type FileMetadata struct {
 	Checksum  string
 	Primary   string
 	Deleted   bool
+	Chunks    []ChunkMetadata
 	Replicas  map[string]ReplicaMetadata
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -138,7 +147,7 @@ func (m *MetadataStore) Nodes() []NodeMetadata {
 }
 
 // BeginFileVersion records a new primary replica and pending secondary replicas.
-func (m *MetadataStore) BeginFileVersion(key string, size int64, checksum, primary string, replicas []string) FileMetadata {
+func (m *MetadataStore) BeginFileVersion(key string, size int64, checksum string, chunks []ChunkMetadata, primary string, replicas []string) FileMetadata {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -152,6 +161,7 @@ func (m *MetadataStore) BeginFileVersion(key string, size int64, checksum, prima
 		Checksum:  checksum,
 		Primary:   primary,
 		Deleted:   false,
+		Chunks:    cloneChunkMetadata(chunks),
 		Replicas:  make(map[string]ReplicaMetadata, len(replicas)),
 		CreatedAt: createdAt,
 		UpdatedAt: now,
@@ -299,7 +309,17 @@ func cloneFileMetadata(meta FileMetadata) FileMetadata {
 		replicas[nodeID] = replica
 	}
 	meta.Replicas = replicas
+	meta.Chunks = cloneChunkMetadata(meta.Chunks)
 	return meta
+}
+
+func cloneChunkMetadata(chunks []ChunkMetadata) []ChunkMetadata {
+	if chunks == nil {
+		return nil
+	}
+	out := make([]ChunkMetadata, len(chunks))
+	copy(out, chunks)
+	return out
 }
 
 func (m *MetadataStore) nextVersionLocked(key string, now time.Time) (uint64, time.Time) {

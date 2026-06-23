@@ -60,6 +60,10 @@ func NewLocalObjectReplicator(objects ObjectStore) *LocalObjectReplicator {
 
 // Replicate copies one object version from source node to target node.
 func (r *LocalObjectReplicator) Replicate(task ReplicationTask) error {
+	if len(task.Chunks) > 0 {
+		return r.replicateChunks(task)
+	}
+
 	_, src, err := r.objects.ReadObject(task.Source, task.Key, task.Version)
 	if err != nil {
 		return err
@@ -80,8 +84,56 @@ func (r *LocalObjectReplicator) Replicate(task ReplicationTask) error {
 	return nil
 }
 
+func (r *LocalObjectReplicator) replicateChunks(task ReplicationTask) error {
+	fullHash := sha256.New()
+	written := []string{}
+
+	for _, chunk := range task.Chunks {
+		objectKey := chunkObjectKey(task.Key, chunk.Index)
+		_, src, err := r.objects.ReadObject(task.Source, objectKey, task.Version)
+		if err != nil {
+			return err
+		}
+
+		chunkHash := sha256.New()
+		tee := io.TeeReader(src, io.MultiWriter(chunkHash, fullHash))
+		n, writeErr := r.objects.WriteObject(task.Target, objectKey, task.Version, tee)
+		closeErr := src.Close()
+		if writeErr != nil {
+			r.deleteChunkObjects(task.Target, task.Key, task.Version, written)
+			return writeErr
+		}
+		if closeErr != nil {
+			r.deleteChunkObjects(task.Target, task.Key, task.Version, written)
+			return closeErr
+		}
+		if n != chunk.Size || hex.EncodeToString(chunkHash.Sum(nil)) != chunk.Checksum {
+			r.objects.DeleteObject(task.Target, objectKey, task.Version)
+			r.deleteChunkObjects(task.Target, task.Key, task.Version, written)
+			return ErrChecksumMismatch
+		}
+		written = append(written, objectKey)
+	}
+
+	if task.Checksum != "" && hex.EncodeToString(fullHash.Sum(nil)) != task.Checksum {
+		r.deleteChunkObjects(task.Target, task.Key, task.Version, written)
+		return ErrChecksumMismatch
+	}
+	return nil
+}
+
+func (r *LocalObjectReplicator) deleteChunkObjects(nodeID, key string, version uint64, objectKeys []string) {
+	for _, objectKey := range objectKeys {
+		r.objects.DeleteObject(nodeID, objectKey, version)
+	}
+}
+
 func versionedObjectKey(key string, version uint64) string {
 	return fmt.Sprintf("%s.v%d", key, version)
+}
+
+func chunkObjectKey(key string, index int) string {
+	return fmt.Sprintf("%s.chunk.%06d", key, index)
 }
 
 func checksumBytes(b []byte) string {

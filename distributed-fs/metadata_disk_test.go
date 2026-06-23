@@ -27,6 +27,7 @@ func TestDiskMetadataStorePersistence(t *testing.T) {
 		"picture.png",
 		128,
 		"checksum",
+		[]ChunkMetadata{{Index: 0, Offset: 0, Size: 128, Checksum: "chunk-checksum"}},
 		"node1",
 		[]string{"node1", "node2"},
 	)
@@ -71,6 +72,9 @@ func TestDiskMetadataStorePersistence(t *testing.T) {
 	if got.Replicas["node2"].State != ReplicaHealthy {
 		t.Fatalf("replica state should persist")
 	}
+	if len(got.Chunks) != 1 || got.Chunks[0].Checksum != "chunk-checksum" {
+		t.Fatalf("chunk metadata should persist")
+	}
 }
 
 func TestDiskMetadataStoreTombstonePersistence(t *testing.T) {
@@ -80,7 +84,7 @@ func TestDiskMetadataStoreTombstonePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.BeginFileVersion("foo.txt", 10, "checksum", "node1", []string{"node1"}); err != nil {
+	if _, err := store.BeginFileVersion("foo.txt", 10, "checksum", nil, "node1", []string{"node1"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Tombstone("foo.txt"); err != nil {

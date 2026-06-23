@@ -21,6 +21,7 @@ type PreparedWrite struct {
 	Version  uint64
 	Size     int64
 	Checksum string
+	Chunks   []ChunkMetadata
 	Primary  NodeMetadata
 	Replicas []NodeMetadata
 }
@@ -63,7 +64,7 @@ func (c *MetadataCoordinator) RegisterNode(id, addr string) (NodeMetadata, error
 }
 
 // PrepareWrite chooses replicas without publishing readable metadata.
-func (c *MetadataCoordinator) PrepareWrite(key string, size int64, checksum string) (PreparedWrite, error) {
+func (c *MetadataCoordinator) PrepareWrite(key string, size int64, checksum string, chunks []ChunkMetadata) (PreparedWrite, error) {
 	nodes, err := c.metadata.HealthyNodes()
 	if err != nil {
 		return PreparedWrite{}, err
@@ -83,6 +84,7 @@ func (c *MetadataCoordinator) PrepareWrite(key string, size int64, checksum stri
 		Version:  version,
 		Size:     size,
 		Checksum: checksum,
+		Chunks:   cloneChunkMetadata(chunks),
 		Primary:  plan.Primary,
 		Replicas: plan.Replicas,
 	}, nil
@@ -95,7 +97,7 @@ func (c *MetadataCoordinator) CommitWrite(prepared PreparedWrite) (WritePlan, er
 		replicaIDs = append(replicaIDs, node.ID)
 	}
 
-	meta, err := c.metadata.BeginFileVersion(prepared.Key, prepared.Size, prepared.Checksum, prepared.Primary.ID, replicaIDs)
+	meta, err := c.metadata.BeginFileVersion(prepared.Key, prepared.Size, prepared.Checksum, prepared.Chunks, prepared.Primary.ID, replicaIDs)
 	if err != nil {
 		return WritePlan{}, err
 	}
@@ -117,7 +119,7 @@ func (c *MetadataCoordinator) CommitWrite(prepared PreparedWrite) (WritePlan, er
 
 // BeginWrite creates metadata for a new version and queues async replica work.
 func (c *MetadataCoordinator) BeginWrite(key string, size int64, checksum string) (WritePlan, error) {
-	prepared, err := c.PrepareWrite(key, size, checksum)
+	prepared, err := c.PrepareWrite(key, size, checksum, nil)
 	if err != nil {
 		return WritePlan{}, err
 	}
@@ -247,6 +249,7 @@ func (c *MetadataCoordinator) repairExistingReplicas(meta FileMetadata, source s
 			Key:       meta.Key,
 			Version:   meta.Version,
 			Checksum:  meta.Checksum,
+			Chunks:    cloneChunkMetadata(meta.Chunks),
 			Source:    source,
 			Target:    nodeID,
 			State:     ReplicationTaskPending,
@@ -278,6 +281,7 @@ func (c *MetadataCoordinator) repairMissingReplicas(meta FileMetadata, source st
 			Key:       meta.Key,
 			Version:   meta.Version,
 			Checksum:  meta.Checksum,
+			Chunks:    cloneChunkMetadata(meta.Chunks),
 			Source:    source,
 			Target:    node.ID,
 			State:     ReplicationTaskPending,

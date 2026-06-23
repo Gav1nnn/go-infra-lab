@@ -55,6 +55,7 @@ type ReplicationTask struct {
 	Key        string
 	Version    uint64
 	Checksum   string
+	Chunks     []ChunkMetadata
 	Source     string
 	Target     string
 	State      ReplicationTaskState
@@ -140,6 +141,7 @@ func TasksForFile(meta FileMetadata, now time.Time) ([]ReplicationTask, error) {
 			Key:       meta.Key,
 			Version:   meta.Version,
 			Checksum:  meta.Checksum,
+			Chunks:    cloneChunkMetadata(meta.Chunks),
 			Source:    meta.Primary,
 			Target:    nodeID,
 			State:     ReplicationTaskPending,

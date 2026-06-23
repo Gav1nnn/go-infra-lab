@@ -92,6 +92,61 @@ func TestManagedFileServiceReplication(t *testing.T) {
 	}
 }
 
+func TestManagedFileServiceChunkedPutGetAndReplication(t *testing.T) {
+	svc := newTestManagedFileService(t, 2)
+	svc.RegisterNode("node1", ":3000")
+	svc.RegisterNode("node2", ":5000")
+
+	data := bytes.Repeat([]byte("x"), int(defaultChunkSize)+17)
+	meta, err := svc.Put("large.bin", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Chunks) != 2 {
+		t.Fatalf("have %d chunks want 2", len(meta.Chunks))
+	}
+	if meta.Chunks[0].Size != defaultChunkSize || meta.Chunks[1].Size != 17 {
+		t.Fatalf("unexpected chunk sizes: %+v", meta.Chunks)
+	}
+	if svc.objects.HasObject(meta.Primary, "large.bin", meta.Version) {
+		t.Fatalf("whole-file object should not be stored for chunked metadata")
+	}
+	for _, chunk := range meta.Chunks {
+		if !svc.objects.HasObject(meta.Primary, chunkObjectKey("large.bin", chunk.Index), meta.Version) {
+			t.Fatalf("primary chunk %d should exist", chunk.Index)
+		}
+	}
+
+	task, err := svc.RunReplicationOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != ReplicationTaskDone {
+		t.Fatalf("have task state %s want done", task.State)
+	}
+	for _, chunk := range meta.Chunks {
+		if !svc.objects.HasObject(task.Target, chunkObjectKey("large.bin", chunk.Index), meta.Version) {
+			t.Fatalf("target chunk %d should exist", chunk.Index)
+		}
+	}
+
+	r, gotMeta, err := svc.Get("large.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("chunked read returned corrupted data")
+	}
+	if len(gotMeta.Chunks) != 2 {
+		t.Fatalf("have %d chunks want 2", len(gotMeta.Chunks))
+	}
+}
+
 func TestManagedFileServiceReadsReplicaWhenPrimaryMissing(t *testing.T) {
 	svc := newTestManagedFileService(t, 2)
 	svc.RegisterNode("node1", ":3000")
@@ -106,8 +161,10 @@ func TestManagedFileServiceReadsReplicaWhenPrimaryMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.objects.DeleteObject(meta.Primary, "foo.txt", meta.Version); err != nil {
-		t.Fatal(err)
+	for _, chunk := range meta.Chunks {
+		if err := svc.objects.DeleteObject(meta.Primary, chunkObjectKey("foo.txt", chunk.Index), meta.Version); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	r, _, err := svc.Get("foo.txt")

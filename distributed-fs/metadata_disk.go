@@ -122,7 +122,7 @@ func (m *DiskMetadataStore) Nodes() ([]NodeMetadata, error) {
 }
 
 // BeginFileVersion records a new primary replica and pending secondary replicas.
-func (m *DiskMetadataStore) BeginFileVersion(key string, size int64, checksum, primary string, replicas []string) (FileMetadata, error) {
+func (m *DiskMetadataStore) BeginFileVersion(key string, size int64, checksum string, chunks []ChunkMetadata, primary string, replicas []string) (FileMetadata, error) {
 	var meta FileMetadata
 	err := m.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(metadataFilesBucket)
@@ -147,6 +147,7 @@ func (m *DiskMetadataStore) BeginFileVersion(key string, size int64, checksum, p
 			Checksum:  checksum,
 			Primary:   primary,
 			Deleted:   false,
+			Chunks:    cloneChunkMetadata(chunks),
 			Replicas:  make(map[string]ReplicaMetadata, len(replicas)),
 			CreatedAt: createdAt,
 			UpdatedAt: now,
