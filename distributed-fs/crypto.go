@@ -29,9 +29,7 @@ func newEncryptionKey() []byte {
 	return keyBuf
 }
 
-// copyStream is the core loop for streaming AES-CTR encryption/decryption.
-// It reads from src in 32KB chunks, applies XORKeyStream, and writes to dst.
-// nw starts at blockSize (to account for the IV) and accumulates total bytes written.
+// copyStream copies data through an AES-CTR stream in fixed-size buffers.
 func copyStream(stream cipher.Stream, blockSize int, src io.Reader, dst io.Writer) (int, error) {
 	var (
 		buf = make([]byte, 32*1024)
@@ -41,9 +39,12 @@ func copyStream(stream cipher.Stream, blockSize int, src io.Reader, dst io.Write
 		n, err := src.Read(buf)
 		if n > 0 {
 			stream.XORKeyStream(buf, buf[:n])
-			nn, err := dst.Write(buf[:n])
-			if err != nil {
-				return 0, err
+			nn, writeErr := dst.Write(buf[:n])
+			if writeErr != nil {
+				return 0, writeErr
+			}
+			if nn != n {
+				return 0, io.ErrShortWrite
 			}
 			nw += nn
 		}
@@ -64,13 +65,11 @@ func copyEncrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
 		return 0, err
 	}
 
-	// Generate a random 16-byte IV (initialization vector)
 	iv := make([]byte, block.BlockSize())
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 		return 0, err
 	}
 
-	// Prepend the IV so the receiver can decrypt
 	if _, err := dst.Write(iv); err != nil {
 		return 0, err
 	}
@@ -86,9 +85,8 @@ func copyDecrypt(key []byte, src io.Reader, dst io.Writer) (int, error) {
 		return 0, err
 	}
 
-	// Read the IV (first 16 bytes of the stream)
 	iv := make([]byte, block.BlockSize())
-	if _, err := src.Read(iv); err != nil {
+	if _, err := io.ReadFull(src, iv); err != nil {
 		return 0, err
 	}
 

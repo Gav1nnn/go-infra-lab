@@ -1,6 +1,6 @@
 # Distributed FS
 
-一个基于 Go 实现的分布式文件存储项目。项目从 P2P 文件传输原型演进而来，当前重点是构建一个“元数据准确、数据副本最终一致、多副本容错”的小型分布式文件系统。
+一个基于 Go 实现的小型分布式文件存储系统。项目采用中心化 Manager + 多 Storage Node 架构，重点围绕 metadata、chunk manifest、多副本复制、容错恢复和最终一致性展开。
 
 ## Features
 
@@ -8,13 +8,13 @@
 - Manager 使用 bbolt 持久化 metadata 和 replication task，重启后可以恢复文件版本、副本状态、tombstone 和未完成复制任务。
 - 多副本最终一致：写入 primary 成功后发布 metadata，secondary replica 由后台 worker 异步复制。
 - 副本状态机：`pending` / `healthy` / `stale` / `missing` / `deleted`。
-- 节点状态机：`healthy` / `down`，storage node 通过 heartbeat 刷新状态。
+- 节点状态机：`healthy` / `down`，Storage Node 通过 heartbeat 刷新状态。
 - 读取时优先 primary，primary 不可读时降级读取其他 healthy replica。
 - 复制 worker 支持持久化 task、运行租约、失败退避重试、最大重试次数和 dead task，避免任务永久卡在 running 或忙等重试。
 - 上传、下载和 object copy 主链路基于 `io.Reader` / `io.Writer` 流式传输；Manager 通过临时文件 staging 计算 size/checksum，避免大文件常驻内存。
 - 文件内部按固定大小 chunk 存储，metadata 保存每个 chunk 的 offset、size 和 checksum；读取时按 chunk manifest 重组并校验。
 - HTTP API + CLI + Docker Compose demo。
-- 保留原 P2P demo，作为早期传输层原型和后续演进基础。
+- 保留 P2P demo，作为早期传输层原型和后续演进基础。
 
 ## Architecture
 
@@ -133,7 +133,7 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 
 ## Manual Run
 
-启动 storage nodes：
+启动 Storage Nodes：
 
 ```bash
 ./bin/fs storage -id node1 -addr :9101 -root data/node1 -manager http://127.0.0.1:9000
@@ -141,7 +141,7 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 ./bin/fs storage -id node3 -addr :9103 -root data/node3 -manager http://127.0.0.1:9000
 ```
 
-启动 manager：
+启动 Manager：
 
 ```bash
 ./bin/fs manager \
@@ -151,7 +151,7 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
   -node node3=http://127.0.0.1:9103
 ```
 
-原始 P2P demo：
+P2P demo：
 
 ```bash
 ./bin/fs p2p-demo
@@ -165,12 +165,12 @@ GOCACHE=/private/tmp/dfs-go-build go build ./...
 - 当前对外仍是整文件 PUT/GET，内部使用固定大小 chunk；尚未提供 multipart upload 或 range read API。
 - 复制失败会记录最近错误并按 backoff 重新调度；running task 的 lease 过期后会被恢复为 pending 或标记为 dead。
 - 读失败会将副本标记为 `missing` 或 `stale`，后续 repair loop 会重新规划复制任务。
-- manager 和 storage 都提供 `/healthz`；manager 提供 `/metrics`，返回文件数、删除文件数、replication task 状态分布、节点状态和副本状态分布。
+- Manager 和 Storage Node 都提供 `/healthz`；Manager 提供 `/metrics`，返回文件数、删除文件数、replication task 状态分布、节点状态和副本状态分布。
 - 后台 heartbeat、repair、replication loop 使用 `log.Printf` 输出运行错误。
 
 ## Future Work
 
-- 使用 Raft 将 metadata manager 扩展为高可用集群。
+- 使用 Raft 将 metadata Manager 扩展为高可用集群。
 - 将 P2P transport 接入当前 HTTP object copy 主链路。
 - 增加 multipart upload、range read 和 chunk 级 repair。
 - 为 repair worker 增加限速和任务过期清理。

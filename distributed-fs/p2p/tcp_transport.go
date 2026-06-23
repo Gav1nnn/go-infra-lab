@@ -10,13 +10,9 @@ import (
 
 // TCPeer represents the remote node connected via TCP.
 type TCPeer struct {
-	// embed net.Conn so we automatically satisfy the net.Conn part of Peer
 	net.Conn
-	// if we dial a conn -> outbound = true
-	// if we accept a conn -> outbound = false
 	outbound bool
-	// is used to wait for the peer to close the connection.
-	wg *sync.WaitGroup
+	wg       *sync.WaitGroup
 }
 
 func NewTCPeer(conn net.Conn, outbound bool) *TCPeer {
@@ -27,33 +23,32 @@ func NewTCPeer(conn net.Conn, outbound bool) *TCPeer {
 	}
 }
 
-// CloseStream sends a signal that we want to close the connection stream.
+// CloseStream marks the active stream as complete.
 func (p *TCPeer) CloseStream() error {
 	p.wg.Done()
 	return nil
 }
 
-// Send byte data to the peer.
+// Send writes bytes to the peer connection.
 func (p *TCPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
 	return err
 }
 
-// settings for the TCP transport layer.
+// TCPTransportOpts configures TCP peer transport.
 type TCPTransportOpts struct {
-	ListenAddr    string        // the address to listen on, e.g. ":8080"
-	HandshakeFunc HandshakeFunc // the handshake func
+	ListenAddr    string
+	HandshakeFunc HandshakeFunc
 	Decoder       Decoder
-	// callback when a new peer is connected,
-	// returns an error if the connection should be rejected.
-	OnPeer func(Peer) error
+	OnPeer        func(Peer) error
 }
 
+// TCPTransport accepts peer connections and decodes RPC messages.
 type TCPTransport struct {
 	TCPTransportOpts
 
-	listener net.Listener // the TCP monitor
-	rpcCh    chan RPC     // the channel to receive the incoming RPCs.
+	listener net.Listener
+	rpcCh    chan RPC
 }
 
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
@@ -84,8 +79,6 @@ func (t *TCPTransport) Dial(addr string) error {
 	if err != nil {
 		return err
 	}
-	// handle this in a new goroutine
-	// true means this is an outbound connection.
 	go t.handleConn(conn, true)
 	return nil
 }
@@ -147,15 +140,13 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		}
 
 		rpc.From = conn.RemoteAddr().String()
-		// streaming data needs to streaming to complete before continuing to read.
 		if rpc.Stream {
 			peer.wg.Add(1)
 			fmt.Printf("[%s] incoming stream, waiting...\n", conn.RemoteAddr())
-			peer.wg.Wait() // block, wait for CloseStream() be called
+			peer.wg.Wait()
 			fmt.Printf("[%s] stream closed, resuming read loop\n", conn.RemoteAddr())
 			continue
 		}
-		// normal msgs will be sent to RPC channel
 		t.rpcCh <- rpc
 	}
 }

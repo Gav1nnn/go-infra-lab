@@ -210,6 +210,7 @@ func (s *ManagedFileService) Metrics() (ServiceMetrics, error) {
 	return metrics, nil
 }
 
+// writeChunks writes staged content to one storage node by chunk.
 func (s *ManagedFileService) writeChunks(nodeID, key string, version uint64, staged *tempFileReadCloser, chunks []ChunkMetadata) error {
 	if len(chunks) == 0 {
 		if _, err := staged.Seek(0, io.SeekStart); err != nil {
@@ -238,6 +239,7 @@ func (s *ManagedFileService) writeChunks(nodeID, key string, version uint64, sta
 	return nil
 }
 
+// stageReplica rebuilds one file version from a replica and verifies checksums.
 func (s *ManagedFileService) stageReplica(nodeID string, meta FileMetadata) (*tempFileReadCloser, error) {
 	if len(meta.Chunks) == 0 {
 		_, r, err := s.objects.ReadObject(nodeID, meta.Key, meta.Version)
@@ -300,6 +302,7 @@ func (s *ManagedFileService) stageReplica(nodeID string, meta FileMetadata) (*te
 	return staged, nil
 }
 
+// deleteObjects removes either a legacy object or all chunk objects.
 func (s *ManagedFileService) deleteObjects(nodeID, key string, version uint64, chunks []ChunkMetadata) {
 	if len(chunks) == 0 {
 		s.objects.DeleteObject(nodeID, key, version)
@@ -310,6 +313,7 @@ func (s *ManagedFileService) deleteObjects(nodeID, key string, version uint64, c
 	}
 }
 
+// stageReader copies a stream to a temp file and builds its chunk manifest.
 func stageReader(r io.Reader) (*tempFileReadCloser, int64, string, []ChunkMetadata, error) {
 	f, err := os.CreateTemp("", "dfs-object-*")
 	if err != nil {
@@ -392,6 +396,7 @@ func stageReader(r io.Reader) (*tempFileReadCloser, int64, string, []ChunkMetada
 	return &tempFileReadCloser{File: f}, total, hex.EncodeToString(h.Sum(nil)), chunks, nil
 }
 
+// tempFileReadCloser removes the temp file when it is closed.
 type tempFileReadCloser struct {
 	*os.File
 }

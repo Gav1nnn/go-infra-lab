@@ -6,22 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 )
 
-const defaultRootFolderName = "ggnetwork"
+const defaultRootFolderName = "dfs-data"
 
 // CASPathTransformFunc converts a key into a content-addressable storage path.
 // It SHA-1 hashes the key, then splits the hex string into 5-char segments
 // to create a nested directory structure (e.g. "abc12/3def4/...").
 func CASPathTransformFunc(key string) PathKey {
-	hash := sha1.Sum([]byte(key))          // SHA-1 hash, 20 bytes
-	hashStr := hex.EncodeToString(hash[:]) // 40-char hex string
+	hash := sha1.Sum([]byte(key))
+	hashStr := hex.EncodeToString(hash[:])
 
 	blocksize := 5
-	sliceLen := len(hashStr) / blocksize // 40 / 5 = 8 segments
+	sliceLen := len(hashStr) / blocksize
 	paths := make([]string, sliceLen)
 
 	for i := 0; i < sliceLen; i++ {
@@ -30,8 +31,8 @@ func CASPathTransformFunc(key string) PathKey {
 	}
 
 	return PathKey{
-		PathName: strings.Join(paths, "/"), // e.g. "68044/29f74/181a6/..."
-		FileName: hashStr,                  // e.g. "6804429f74181a63..."
+		PathName: strings.Join(paths, "/"),
+		FileName: hashStr,
 	}
 }
 
@@ -40,8 +41,8 @@ type PathTransformFunc func(string) PathKey
 
 // PathKey holds the transformed file path components.
 type PathKey struct {
-	PathName string // nested directory path, e.g. "68044/29f74"
-	FileName string // the full filename (hash), e.g. "6804429f74..."
+	PathName string
+	FileName string
 }
 
 // FullPath returns the complete relative path: "PathName/FileName".
@@ -58,12 +59,10 @@ func (p PathKey) FirstPathName() string {
 	return paths[0]
 }
 
-// ======================================================================
-
 // StoreOpts configures the Store.
 type StoreOpts struct {
-	Root              string            // root directory for all stored files
-	PathTransformFunc PathTransformFunc // function to transform keys into paths
+	Root              string
+	PathTransformFunc PathTransformFunc
 }
 
 // DefaultPathTransformFunc is a fallback that uses the key itself as the path.
@@ -97,9 +96,8 @@ func NewStore(opts StoreOpts) *Store {
 // Has checks if a file with the given key exists on disk.
 func (s *Store) Has(id string, key string) bool {
 	pathkey := s.PathTransformFunc(key)
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathkey.FullPath())
 
-	_, err := os.Stat(fullPathWithRoot)
+	_, err := os.Stat(filepath.Join(s.Root, id, pathkey.FullPath()))
 	return !errors.Is(err, os.ErrNotExist)
 }
 
@@ -108,16 +106,16 @@ func (s *Store) Clear() error {
 	return os.RemoveAll(s.Root)
 }
 
-// Delete removes a file and its parent directory tree from disk.
+// Delete removes a file and cleans up empty parent directories.
 func (s *Store) Delete(id string, key string) error {
 	pathkey := s.PathTransformFunc(key)
+	fullPath := filepath.Join(s.Root, id, pathkey.FullPath())
 
-	defer func() {
-		log.Printf("deleted [%s] from disk", pathkey.FileName)
-	}()
+	if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 
-	firstPathNameWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathkey.FirstPathName())
-	return os.RemoveAll(firstPathNameWithRoot)
+	return s.removeEmptyParents(filepath.Dir(fullPath), filepath.Join(s.Root, id))
 }
 
 // Write stores data from a reader to disk under the given id and key.
@@ -140,13 +138,12 @@ func (s *Store) WriteDecrypt(encKey []byte, id string, key string, r io.Reader) 
 func (s *Store) openFileForWriting(id string, key string) (*os.File, error) {
 	pathKey := s.PathTransformFunc(key)
 
-	pathNameWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.PathName)
+	pathNameWithRoot := filepath.Join(s.Root, id, pathKey.PathName)
 	if err := os.MkdirAll(pathNameWithRoot, os.ModePerm); err != nil {
 		return nil, err
 	}
 
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FullPath())
-	return os.Create(fullPathWithRoot)
+	return os.Create(filepath.Join(s.Root, id, pathKey.FullPath()))
 }
 
 // writeStream writes a data stream directly to a file on disk.
@@ -162,9 +159,8 @@ func (s *Store) writeStream(id string, key string, r io.Reader) (int64, error) {
 // Read opens a file and returns its size and a ReadCloser.
 func (s *Store) Read(id string, key string) (int64, io.ReadCloser, error) {
 	pathKey := s.PathTransformFunc(key)
-	fullPathWithRoot := fmt.Sprintf("%s/%s/%s", s.Root, id, pathKey.FullPath())
 
-	file, err := os.Open(fullPathWithRoot)
+	file, err := os.Open(filepath.Join(s.Root, id, pathKey.FullPath()))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -175,4 +171,20 @@ func (s *Store) Read(id string, key string) (int64, io.ReadCloser, error) {
 	}
 
 	return fi.Size(), file, nil
+}
+
+func (s *Store) removeEmptyParents(dir, stop string) error {
+	for dir != stop && strings.HasPrefix(dir, stop) {
+		if err := os.Remove(dir); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+				return nil
+			}
+			return err
+		}
+		dir = filepath.Dir(dir)
+	}
+	return nil
 }

@@ -1,14 +1,15 @@
 package p2p
 
 const (
-	// represents the type is a message.
+	// IncomingMessage marks a framed control message.
 	IncomingMessage = 0x1
-	// represents the type is a stream.
+	// IncomingStream marks raw stream data.
 	IncomingStream = 0x2
 )
 
+// RPC is one decoded message from a peer.
 type RPC struct {
-	From    string // the remote peer's address.
-	Payload []byte // the body of the message.
-	Stream  bool   // whether the payload is a stream or not.
+	From    string
+	Payload []byte
+	Stream  bool
 }
